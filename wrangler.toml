@@ -1,0 +1,7 @@
+name = "nhip-ngay"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+main = "./worker/index.ts"
+
+[assets]
+directory = "./.sites-runtime/dist/assets"
