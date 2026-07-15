@@ -8,25 +8,28 @@ import {
   ChevronRight,
   Circle,
   Clock3,
+  Flame,
   Flag,
   GraduationCap,
   HeartPulse,
   Home,
   House,
   LayoutList,
+  Moon,
   NotebookPen,
   Pause,
   Play,
   Plus,
   Search,
   Sparkles,
+  Sun,
   Trash2,
   WalletCards,
   Wifi,
   WifiOff,
   X,
 } from "lucide-react";
-import {
+import React, {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent,
@@ -70,6 +73,50 @@ type Reflection = {
 };
 
 const STORAGE_KEY = "nhip-ngay-data-v1";
+const HISTORY_KEY = "nhip-ngay-history-v1";
+const THEME_KEY = "nhip-ngay-theme-v1";
+
+type DayRecord = { total: number; done: number };
+type HistoryData = { [date: string]: DayRecord };
+
+function calcStreak(history: HistoryData): number {
+  let streak = 0;
+  const d = new Date();
+  for (let i = 0; i < 365; i++) {
+    const check = new Date(d);
+    check.setDate(check.getDate() - i);
+    const key = dateKey(check);
+    const record = history[key];
+    if (!record || record.total === 0) {
+      if (i === 0) continue; // today not recorded yet — skip
+      break;
+    }
+    if (record.done === 0) break;
+    streak++;
+  }
+  return streak;
+}
+
+const CONFETTI_COLORS = ["#f05a28", "#42765a", "#f5c518", "#4a90d9", "#e84393", "#9b59b6"];
+
+function ConfettiShower() {
+  const pieces = Array.from({ length: 40 }, (_, i) => (
+    <div
+      key={i}
+      className="confetti-piece"
+      style={{
+        left: `${(i / 40) * 100 + (Math.sin(i) * 5)}%`,
+        animationDelay: `${(i % 8) * 0.12}s`,
+        animationDuration: `${1.0 + (i % 5) * 0.18}s`,
+        background: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+        borderRadius: i % 3 === 0 ? "50%" : "2px",
+        width: `${8 + (i % 4) * 2}px`,
+        height: `${8 + (i % 4) * 2}px`,
+      }}
+    />
+  ));
+  return <div className="confetti-container" aria-hidden="true">{pieces}</div>;
+}
 
 const categories: Record<Category, { label: string; short: string }> = {
   work: { label: "Công việc", short: "Việc" },
@@ -236,6 +283,10 @@ export default function HomePage() {
   const [hydrated, setHydrated] = useState(false);
   const [toast, setToast] = useState("");
   const [focus, setFocus] = useState<{ taskId: string; remaining: number; running: boolean } | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [history, setHistory] = useState<HistoryData>({});
+  const [showConfetti, setShowConfetti] = useState(false);
+  const prevCompletedRef = React.useRef(0);
 
   const today = dateKey();
   const todayTasks = useMemo(
@@ -258,6 +309,29 @@ export default function HomePage() {
     return text.charAt(0).toUpperCase() + text.slice(1);
   }, []);
 
+  const streak = useMemo(() => calcStreak(history), [history]);
+
+  const heatmapCells = useMemo(() => {
+    const cells: React.ReactNode[] = [];
+    const start = new Date();
+    start.setDate(start.getDate() - 83);
+    for (let i = 0; i < 84; i++) {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      const key = dateKey(d);
+      const rec = history[key];
+      const pct = rec?.total ? rec.done / rec.total : 0;
+      const level = pct === 0 ? 0 : pct < 0.34 ? 1 : pct < 0.67 ? 2 : pct < 1 ? 3 : 4;
+      const label = rec ? `${key}: ${rec.done}/${rec.total} hoàn thành` : key;
+      cells.push(<div key={key} className={`heat-cell heat-${level}`} title={label} />);
+    }
+    return cells;
+  }, [history]);
+
+  function toggleTheme() {
+    setTheme(t => t === "light" ? "dark" : "light");
+  }
+
   useEffect(() => {
     const initialize = window.requestAnimationFrame(() => {
       try {
@@ -270,6 +344,15 @@ export default function HomePage() {
           }
           if (parsed.reflection) setReflection(parsed.reflection);
         }
+        // Load history
+        const storedHistory = localStorage.getItem(HISTORY_KEY);
+        if (storedHistory) setHistory(JSON.parse(storedHistory));
+        // Load theme
+        const savedTheme = localStorage.getItem(THEME_KEY) as "light" | "dark" | null;
+        const preferred = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        const resolved = savedTheme ?? preferred;
+        setTheme(resolved);
+        document.documentElement.setAttribute("data-theme", resolved);
       } catch {
         // Keep the safe starter data when local storage is unavailable or malformed.
       }
@@ -289,6 +372,29 @@ export default function HomePage() {
       window.removeEventListener("offline", goOffline);
     };
   }, []);
+
+  // Persist theme + apply to DOM
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    if (hydrated) localStorage.setItem(THEME_KEY, theme);
+  }, [theme, hydrated]);
+
+  // Save daily completion history & trigger confetti
+  useEffect(() => {
+    if (!hydrated) return;
+    const record: DayRecord = { total: todayTasks.length, done: completedToday };
+    setHistory(prev => {
+      const updated = { ...prev, [today]: record };
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+    // Confetti: trigger only when newly completing all tasks
+    if (todayTasks.length > 0 && completedToday === todayTasks.length && prevCompletedRef.current < todayTasks.length) {
+      setShowConfetti(true);
+      setTimeout(() => setShowConfetti(false), 3600);
+    }
+    prevCompletedRef.current = completedToday;
+  }, [tasks, hydrated, today]); // eslint-disable-line
 
   useEffect(() => {
     if (!hydrated) return;
@@ -593,10 +699,16 @@ export default function HomePage() {
         </nav>
 
         <div className="header-actions">
+          <span className={`streak-badge ${streak === 0 ? "zero" : ""}`} title={`Chuỗi ${streak} ngày liên tiếp`}>
+            <Flame size={13} />{streak > 0 ? `${streak} ngày` : "Bắt đầu hôm nay"}
+          </span>
           <span className={`connection ${online ? "online" : "offline"}`} title={online ? "Đang trực tuyến" : "Đang dùng ngoại tuyến"}>
             {online ? <Wifi size={16} /> : <WifiOff size={16} />}
             <span>{online ? "Đã lưu" : "Ngoại tuyến"}</span>
           </span>
+          <button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "Chuyển sang sáng" : "Chuyển sang tối"}>
+            {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
           <button className="primary-add desktop-add" type="button" onClick={() => setComposerOpen(true)}><Plus size={20} /> Thêm việc</button>
         </div>
       </header>
@@ -713,12 +825,39 @@ export default function HomePage() {
                 <p className="hand-date">Tiến bộ, không áp lực</p>
                 <h1>Nhịp độ của mình</h1>
               </div>
-              <span className="period-chip">7 ngày gần đây</span>
+              <span className="period-chip">12 tuần gần đây</span>
             </div>
             <div className="stats-grid">
               <article className="stat-card stat-primary"><span>Hoàn thành hôm nay</span><strong>{progress}%</strong><p>{completedToday} trên {todayTasks.length} công việc</p></article>
               <article className="stat-card"><span>Thời gian đã hoàn thành</span><strong>{totalMinutes}<small> phút</small></strong><p>Mỗi phút tập trung đều được tính.</p></article>
               <article className="stat-card"><span>Mức sẵn sàng</span><strong>{preparedPercent}%</strong><p>Đồ dùng và tài liệu đã chuẩn bị.</p></article>
+            </div>
+            <div className="heatmap-section">
+              <div className="heatmap-heading">
+                <div>
+                  <span className="eyebrow">Lịch sử 12 tuần</span>
+                  <h2>Chuỗi ngày của mình</h2>
+                  <p>Mỗi ô là một ngày — màu càng đậm, càng nhiều việc xong.</p>
+                </div>
+                <div className="streak-display">
+                  <span className="streak-num">{streak}</span>
+                  <span className="streak-label">ngày liên tiếp 🔥</span>
+                </div>
+              </div>
+              <div className="heatmap-grid" aria-label="Biểu đồ hoàn thành 84 ngày gần nhất">
+                {heatmapCells}
+              </div>
+              <div className="heatmap-legend">
+                <span>Ít</span>
+                <div className="heatmap-legend-cells">
+                  <div className="heat-cell" />
+                  <div className="heat-cell heat-1" />
+                  <div className="heat-cell heat-2" />
+                  <div className="heat-cell heat-3" />
+                  <div className="heat-cell heat-4" />
+                </div>
+                <span>Nhiều</span>
+              </div>
             </div>
             <article className="rhythm-card">
               <div><span className="eyebrow">Nhận xét nhẹ</span><h2>Chuẩn bị tốt giúp bắt đầu dễ hơn.</h2><p>Bạn không cần nhồi thật nhiều việc. Hãy chọn ba ưu tiên, chuẩn bị trước và để khoảng thở giữa các nhịp.</p></div>
@@ -784,6 +923,7 @@ export default function HomePage() {
       )}
 
       {toast && <div className="toast" role="status"><Check size={17} /> {toast}</div>}
+      {showConfetti && <ConfettiShower />}
     </div>
   );
 }
