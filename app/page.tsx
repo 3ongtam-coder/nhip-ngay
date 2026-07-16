@@ -2,6 +2,7 @@
 
 import {
   BarChart3,
+  Brain,
   BriefcaseBusiness,
   CalendarDays,
   Check,
@@ -14,7 +15,11 @@ import {
   HeartPulse,
   Home,
   House,
+  KeyRound,
   LayoutList,
+  Loader2,
+  Mic,
+  MicOff,
   Moon,
   NotebookPen,
   Pause,
@@ -38,10 +43,46 @@ import React, {
   useState,
 } from "react";
 
+// Web Speech API types (not in default TS lib)
+declare global {
+  interface Window {
+    SpeechRecognition: new () => SpeechRecognitionInstance;
+    webkitSpeechRecognition: new () => SpeechRecognitionInstance;
+  }
+}
+interface SpeechRecognitionInstance extends EventTarget {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  start(): void;
+  stop(): void;
+  onstart: (() => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onresult: ((event: SpeechRecognitionResultEvent) => void) | null;
+}
+interface SpeechRecognitionResultEvent extends Event {
+  results: { [index: number]: { [index: number]: { transcript: string } } };
+}
+
 type Category = "work" | "health" | "growth" | "home" | "finance" | "other";
 type Priority = "high" | "medium" | "low";
 type Energy = "high" | "medium" | "low";
 type View = "today" | "plan" | "notes" | "stats";
+
+type AiDraft = {
+  title: string;
+  category: Category;
+  priority: Priority;
+  energy: Energy;
+  date: string;
+  time: string;
+  duration: number;
+  outcome: string;
+  preparation: string[];
+  steps: string[];
+  note: string;
+};
 
 type CheckItem = {
   id: string;
@@ -288,6 +329,17 @@ export default function HomePage() {
   const [showConfetti, setShowConfetti] = useState(false);
   const prevCompletedRef = React.useRef(0);
 
+  // Voice + AI state
+  const [mistralKey, setMistralKey] = useState("");
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [aiDraft, setAiDraft] = useState<AiDraft | null>(null);
+  const [formKey, setFormKey] = useState(0);
+  const [keyInputValue, setKeyInputValue] = useState("");
+  const srRef = React.useRef<SpeechRecognitionInstance | null>(null);
+
   const today = dateKey();
   const todayTasks = useMemo(
     () =>
@@ -356,6 +408,9 @@ export default function HomePage() {
       } catch {
         // Keep the safe starter data when local storage is unavailable or malformed.
       }
+      // Load Mistral API key
+      const savedKey = localStorage.getItem("nhip-ngay-mistral-key");
+      if (savedKey) setMistralKey(savedKey);
       setOnline(navigator.onLine);
       setHydrated(true);
     });
@@ -420,6 +475,103 @@ export default function HomePage() {
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  // ── Mistral AI analysis ──────────────────────────────────────────────────────
+  async function callMistralAI(text: string) {
+    const key = mistralKey.trim();
+    if (!key) {
+      setShowKeyInput(true);
+      return;
+    }
+    setIsAnalyzing(true);
+    const todayStr = dateKey();
+    const systemPrompt = `You are a strict task extraction assistant. Respond ONLY with a single valid JSON object. No explanation, no markdown fences, no extra text whatsoever.`;
+    const userPrompt = `Extract task details from the following Vietnamese text. Return JSON with EXACTLY these fields:
+{
+  "title": "task name in Vietnamese (concise)",
+  "category": "work|health|growth|home|finance|other",
+  "priority": "high|medium|low",
+  "energy": "high|medium|low",
+  "date": "YYYY-MM-DD (use ${todayStr} if not mentioned)",
+  "time": "HH:MM (use 09:00 if not mentioned)",
+  "duration": <integer minutes, use 30 if not mentioned>,
+  "outcome": "1-2 sentence success criteria in Vietnamese",
+  "preparation": ["item1", "item2"],
+  "steps": ["step1", "step2", "step3"],
+  "note": "any extra context, or empty string"
+}
+
+Text: "${text}"`;
+    try {
+      const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+        body: JSON.stringify({
+          model: "mistral-large-latest",
+          temperature: 0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { choices: { message: { content: string } }[] };
+      const raw = data.choices[0]?.message?.content ?? "{}";
+      const parsed = JSON.parse(raw) as AiDraft;
+      // Validate required fields
+      if (!parsed.title) throw new Error("no title");
+      // Sanitize
+      const draft: AiDraft = {
+        title: String(parsed.title ?? ""),
+        category: (["work","health","growth","home","finance","other"].includes(parsed.category) ? parsed.category : "work") as Category,
+        priority: (["high","medium","low"].includes(parsed.priority) ? parsed.priority : "medium") as Priority,
+        energy: (["high","medium","low"].includes(parsed.energy) ? parsed.energy : "medium") as Energy,
+        date: /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : todayStr,
+        time: /^\d{2}:\d{2}$/.test(parsed.time) ? parsed.time : "09:00",
+        duration: Number(parsed.duration) > 0 ? Number(parsed.duration) : 30,
+        outcome: String(parsed.outcome ?? ""),
+        preparation: Array.isArray(parsed.preparation) ? parsed.preparation.map(String) : [],
+        steps: Array.isArray(parsed.steps) ? parsed.steps.map(String) : [],
+        note: String(parsed.note ?? ""),
+      };
+      setAiDraft(draft);
+      setFormKey(k => k + 1);
+      setToast("AI đã phân tích xong — kiểm tra và lưu nhé!");
+    } catch {
+      setToast("Không thể phân tích. Kiểm tra API key hoặc thử lại.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
+
+  function startVoiceInput() {
+    const SRClass = typeof window !== "undefined" ? (window.SpeechRecognition ?? window.webkitSpeechRecognition) : null;
+    if (!SRClass) {
+      setToast("Trình duyệt không hỗ trợ nhận giọng nói.");
+      return;
+    }
+    if (isListening) {
+      srRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+    const sr = new SRClass();
+    srRef.current = sr;
+    sr.lang = "vi-VN";
+    sr.interimResults = false;
+    sr.maxAlternatives = 1;
+    sr.onstart = () => setIsListening(true);
+    sr.onend = () => setIsListening(false);
+    sr.onerror = () => { setIsListening(false); setToast("Lỗi microphone — thử lại nhé."); };
+    sr.onresult = (event: SpeechRecognitionResultEvent) => {
+      const text = event.results[0][0].transcript;
+      setVoiceTranscript(text);
+      callMistralAI(text);
+    };
+    sr.start();
+  }
 
   function openTask(id: string) {
     setSelectedId(id);
@@ -886,30 +1038,82 @@ export default function HomePage() {
       )}
 
       {composerOpen && (
-        <div className="sheet-layer composer-layer" role="dialog" aria-modal="true" aria-label="Thêm công việc mới">
-          <button className="sheet-backdrop" type="button" onClick={() => setComposerOpen(false)} aria-label="Đóng biểu mẫu" />
-          <form className="composer" onSubmit={addTask}>
+        <div className="sheet-layer composer-layer" role="dialog" aria-modal="true" aria-label={`Thêm công việc mới`}>
+          <button className="sheet-backdrop" type="button" onClick={() => { setComposerOpen(false); setAiDraft(null); setVoiceTranscript(""); }} aria-label="Đóng biểu mẫu" />
+          <form key={formKey} className="composer" onSubmit={addTask}>
             <div className="sheet-handle" aria-hidden="true" />
             <div className="composer-header">
               <div><span className="eyebrow">Ghi rõ để làm dễ</span><h2>Thêm công việc</h2></div>
-              <button type="button" className="icon-button" onClick={() => setComposerOpen(false)} aria-label="Đóng"><X size={22} /></button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button type="button" className="icon-button" onClick={() => { setKeyInputValue(mistralKey); setShowKeyInput(true); }} aria-label="Cài API key" title="Cài Mistral API key"><KeyRound size={18} /></button>
+                <button type="button" className="icon-button" onClick={() => { setComposerOpen(false); setAiDraft(null); setVoiceTranscript(""); }} aria-label="Đóng"><X size={22} /></button>
+              </div>
+            </div>
+
+            <div className={`voice-panel${isListening ? " listening" : ""}${isAnalyzing ? " analyzing" : ""}`}>
+              <div className="voice-row">
+                <button type="button" id="voice-mic-btn" className={`mic-btn${isListening ? " mic-active" : ""}`} onClick={startVoiceInput} disabled={isAnalyzing} aria-label={isListening ? "Dừng ghi âm" : "Bắt đầu ghi giọng nói"}>
+                  {isListening ? <MicOff size={22} /> : <Mic size={22} />}
+                  {isListening && <span className="mic-pulse" aria-hidden="true" />}
+                </button>
+                <div className="voice-text-area">
+                  {isAnalyzing ? (
+                    <span className="voice-analyzing"><Loader2 size={15} className="spin-icon" /><Brain size={15} />AI đang phân tích...</span>
+                  ) : voiceTranscript ? (
+                    <span className="voice-transcript">&ldquo;{voiceTranscript}&rdquo;</span>
+                  ) : (
+                    <span className="voice-hint">{isListening ? "🎙️ Đang nghe... nói tên và mô tả công việc" : "Nhấn mic và nói — AI sẽ điền tên, chuẩn bị, các bước và ghi chú"}</span>
+                  )}
+                </div>
+                {voiceTranscript && !isAnalyzing && (
+                  <button type="button" className="icon-button" onClick={() => callMistralAI(voiceTranscript)} title="Phân tích lại" aria-label="Phân tích lại"><Brain size={17} /></button>
+                )}
+              </div>
+              {aiDraft && <div className="ai-badge"><Sparkles size={13} /> AI đã điền — kiểm tra và chỉnh sửa trước khi lưu</div>}
             </div>
 
             <div className="form-grid">
-              <label className="field field-full"><span>Tên công việc</span><input name="title" autoFocus placeholder="Ví dụ: Chuẩn bị hồ sơ khách hàng" required /></label>
-              <label className="field"><span>Lĩnh vực</span><select name="category" defaultValue="work">{(Object.keys(categories) as Category[]).map((category) => <option key={category} value={category}>{categories[category].label}</option>)}</select></label>
-              <label className="field"><span>Ưu tiên</span><select name="priority" defaultValue="medium"><option value="high">Cao</option><option value="medium">Vừa</option><option value="low">Nhẹ</option></select></label>
-              <label className="field"><span>Ngày</span><input name="date" type="date" defaultValue={today} required /></label>
-              <label className="field"><span>Giờ bắt đầu</span><input name="time" type="time" defaultValue="09:00" /></label>
-              <label className="field"><span>Thời lượng</span><select name="duration" defaultValue="30"><option value="15">15 phút</option><option value="25">25 phút</option><option value="30">30 phút</option><option value="45">45 phút</option><option value="60">60 phút</option><option value="90">90 phút</option></select></label>
-              <label className="field"><span>Năng lượng cần</span><select name="energy" defaultValue="medium"><option value="high">Cao — cần tỉnh táo</option><option value="medium">Vừa</option><option value="low">Thấp — việc nhẹ</option></select></label>
-              <label className="field field-full"><span>Kết quả mong muốn</span><textarea name="outcome" placeholder="Việc này được xem là xong khi..." /></label>
-              <label className="field field-full"><span>Cần chuẩn bị</span><textarea name="preparation" placeholder={'Mỗi mục một dòng\nVí dụ: Laptop\nTài liệu báo giá'} /></label>
-              <label className="field field-full"><span>Các bước thực hiện</span><textarea name="steps" placeholder={'Mỗi bước một dòng\nVí dụ: Kiểm tra số liệu\nGửi xác nhận'} /></label>
-              <label className="field field-full"><span>Ghi chú thêm</span><textarea name="note" placeholder="Thông tin, người liên quan hoặc điều cần nhớ..." /></label>
+              <label className="field field-full"><span>Tên công việc</span><input name="title" autoFocus placeholder="Ví dụ: Chuẩn bị hồ sơ khách hàng" required defaultValue={aiDraft?.title ?? ""} /></label>
+              <label className="field"><span>Lĩnh vực</span><select name="category" defaultValue={aiDraft?.category ?? "work"}>{(Object.keys(categories) as Category[]).map((c) => <option key={c} value={c}>{categories[c].label}</option>)}</select></label>
+              <label className="field"><span>Ưu tiên</span><select name="priority" defaultValue={aiDraft?.priority ?? "medium"}><option value="high">Cao</option><option value="medium">Vừa</option><option value="low">Nhẹ</option></select></label>
+              <label className="field"><span>Ngày</span><input name="date" type="date" defaultValue={aiDraft?.date ?? today} required /></label>
+              <label className="field"><span>Giờ bắt đầu</span><input name="time" type="time" defaultValue={aiDraft?.time ?? "09:00"} /></label>
+              <label className="field"><span>Thời lượng</span>
+                <select name="duration" defaultValue={String(aiDraft?.duration ?? 30)}>
+                  <option value="15">15 phút</option><option value="25">25 phút</option><option value="30">30 phút</option>
+                  <option value="45">45 phút</option><option value="60">60 phút</option><option value="90">90 phút</option>
+                  {aiDraft && ![15,25,30,45,60,90].includes(aiDraft.duration) && <option value={String(aiDraft.duration)}>{aiDraft.duration} phút</option>}
+                </select>
+              </label>
+              <label className="field"><span>Năng lượng cần</span><select name="energy" defaultValue={aiDraft?.energy ?? "medium"}><option value="high">Cao — cần tỉnh táo</option><option value="medium">Vừa</option><option value="low">Thấp — việc nhẹ</option></select></label>
+              <label className="field field-full"><span>Kết quả mong muốn</span><textarea name="outcome" placeholder="Việc này được xem là xong khi..." defaultValue={aiDraft?.outcome ?? ""} /></label>
+              <label className="field field-full"><span>Cần chuẩn bị</span><textarea name="preparation" placeholder={"Mỗi mục một dòng\nVí dụ: Laptop\nTài liệu báo giá"} defaultValue={aiDraft?.preparation?.join("\n") ?? ""} /></label>
+              <label className="field field-full"><span>Các bước thực hiện</span><textarea name="steps" placeholder={"Mỗi bước một dòng\nVí dụ: Kiểm tra số liệu\nGửi xác nhận"} defaultValue={aiDraft?.steps?.join("\n") ?? ""} /></label>
+              <label className="field field-full"><span>Ghi chú thêm</span><textarea name="note" placeholder="Thông tin, người liên quan hoặc điều cần nhớ..." defaultValue={aiDraft?.note ?? ""} /></label>
             </div>
-            <div className="composer-footer"><button type="button" className="ghost-button" onClick={() => setComposerOpen(false)}>Để sau</button><button className="save-button" type="submit"><Check size={19} /> Lưu công việc</button></div>
+            <div className="composer-footer">
+              <button type="button" className="ghost-button" onClick={() => { setComposerOpen(false); setAiDraft(null); setVoiceTranscript(""); }}>Để sau</button>
+              <button className="save-button" type="submit"><Check size={19} /> Lưu công việc</button>
+            </div>
           </form>
+        </div>
+      )}
+
+      {showKeyInput && (
+        <div className="sheet-layer" role="dialog" aria-modal="true" aria-label="Mistral API Key">
+          <button className="sheet-backdrop" type="button" onClick={() => setShowKeyInput(false)} aria-label="Đóng" />
+          <div className="key-modal">
+            <div className="sheet-handle" aria-hidden="true" />
+            <div className="key-modal-header"><Brain size={26} /><div><h2>Mistral API Key</h2><p>Key lưu trên thiết bị này, không gửi đi đâu.</p></div></div>
+            <input id="mistral-key-input" className="key-input" type="password" placeholder="Dán API key vào đây..." value={keyInputValue} onChange={e => setKeyInputValue(e.target.value)} autoFocus
+              onKeyDown={e => { if (e.key === "Enter") { const k = keyInputValue.trim(); if (!k) return; setMistralKey(k); try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {} setKeyInputValue(""); setShowKeyInput(false); setToast("Đã lưu API key."); }}}
+            />
+            <p className="key-hint">Lấy key tại <a href="https://console.mistral.ai" target="_blank" rel="noreferrer">console.mistral.ai</a> → API Keys</p>
+            <div className="composer-footer">
+              <button type="button" className="ghost-button" onClick={() => setShowKeyInput(false)}>Hủy</button>
+              <button type="button" className="save-button" onClick={() => { const k = keyInputValue.trim(); if (!k) return; setMistralKey(k); try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {} setKeyInputValue(""); setShowKeyInput(false); setToast("Đã lưu API key."); }}><Check size={18} /> Lưu key</button>
+            </div>
+          </div>
         </div>
       )}
 

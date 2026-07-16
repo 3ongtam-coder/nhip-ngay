@@ -1947,3 +1947,229 @@ p {
   .streak-display .streak-num { font-size: 36px; }
   .heatmap-heading h2 { font-size: 21px; }
 }
+
+/* ── Voice + AI Styles ─────────────────────────────────────────────────────── */
+
+.voice-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 14px;
+  background: rgba(255, 250, 242, 0.7);
+  transition: border-color 200ms, background 200ms, box-shadow 200ms;
+}
+
+.voice-panel.listening {
+  border-color: rgba(240, 90, 40, 0.6);
+  background: rgba(255, 240, 232, 0.55);
+  box-shadow: 0 0 0 3px rgba(240, 90, 40, 0.1);
+}
+
+.voice-panel.analyzing {
+  border-color: rgba(66, 118, 90, 0.5);
+  background: rgba(232, 240, 232, 0.5);
+}
+
+.voice-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mic-btn {
+  position: relative;
+  display: grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  place-items: center;
+  border: 2px solid var(--line-strong);
+  border-radius: 50%;
+  background: white;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 200ms ease;
+}
+
+.mic-btn:hover:not(:disabled) {
+  border-color: var(--orange);
+  color: var(--orange);
+  transform: scale(1.08);
+}
+
+.mic-btn.mic-active {
+  border-color: var(--orange);
+  background: var(--orange);
+  color: white;
+  box-shadow: 0 6px 18px rgba(240, 90, 40, 0.35);
+}
+
+.mic-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mic-pulse {
+  position: absolute;
+  inset: -6px;
+  border: 2px solid rgba(240, 90, 40, 0.5);
+  border-radius: 50%;
+  animation: mic-ring 1.2s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes mic-ring {
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+
+.voice-text-area {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.voice-hint {
+  color: var(--faint);
+  font-style: italic;
+}
+
+.voice-transcript {
+  color: var(--ink);
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.voice-analyzing {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--green);
+  font-weight: 650;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin-icon {
+  animation: spin 1s linear infinite;
+}
+
+.ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 20px;
+  background: rgba(240, 90, 40, 0.1);
+  color: var(--orange-dark);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+/* ── Key Modal ────────────────────────────────────────────────────────────── */
+
+.key-modal {
+  position: fixed;
+  z-index: 300;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px 24px 32px;
+  border-radius: 20px 20px 0 0;
+  background: var(--paper-light);
+  box-shadow: 0 -12px 40px rgba(71, 48, 25, 0.14);
+}
+
+.key-modal-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  color: var(--orange-dark);
+}
+
+.key-modal-header > div h2 {
+  margin: 0 0 3px;
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.key-modal-header > div p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.key-input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 10px;
+  background: white;
+  font-family: monospace;
+  font-size: 13px;
+  transition: border-color 160ms;
+}
+
+.key-input:focus {
+  border-color: var(--orange);
+  outline: none;
+}
+
+.key-hint {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.key-hint a {
+  color: var(--orange-dark);
+  font-weight: 650;
+}
+
+@media (min-width: 761px) {
+  .key-modal {
+    position: fixed;
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    left: 50%;
+    width: min(480px, 92vw);
+    transform: translate(-50%, -50%);
+    border-radius: 18px;
+    box-shadow: 0 24px 80px rgba(71, 48, 25, 0.22);
+  }
+}
+
+/* Dark mode voice */
+[data-theme="dark"] .voice-panel {
+  background: rgba(38, 32, 24, 0.7);
+}
+
+[data-theme="dark"] .voice-panel.listening {
+  background: rgba(60, 28, 10, 0.6);
+}
+
+[data-theme="dark"] .mic-btn {
+  background: rgba(50, 42, 32, 0.9);
+}
+
+[data-theme="dark"] .key-modal {
+  background: var(--paper);
+}
+
+[data-theme="dark"] .key-input {
+  background: rgba(38, 32, 24, 0.9);
+}
+
