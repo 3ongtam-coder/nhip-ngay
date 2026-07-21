@@ -2248,3 +2248,256 @@ p {
   background: rgba(38, 32, 24, 0.9);
 }
 
+/* ── Text input row (voice panel) ─────────────────────────────────────────── */
+
+.text-input-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line-strong);
+}
+
+.text-input-divider {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.text-input-wrap {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.ai-text-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 10px;
+  background: white;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  transition: border-color 160ms;
+  font-family: inherit;
+}
+
+.ai-text-input:focus {
+  border-color: var(--orange);
+  outline: none;
+}
+
+.ai-text-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.analyze-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--orange);
+  color: white;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: opacity 160ms, transform 120ms;
+}
+
+.analyze-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: scale(1.03);
+}
+
+.analyze-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── Field required highlight (single-task form) ──────────────────────────── */
+
+.field-required > span {
+  color: #c0392b;
+  font-weight: 750;
+}
+
+.field-required input[type="time"] {
+  border-color: #e74c3c;
+  background: rgba(231, 76, 60, 0.05);
+  animation: pulse-border 1.5s ease-in-out 2;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: #e74c3c; }
+  50% { border-color: rgba(231, 76, 60, 0.3); }
+}
+
+/* ── Multi-task composer ───────────────────────────────────────────────────── */
+
+.multi-composer {
+  max-width: 860px;
+}
+
+.draft-list {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 4px;
+  max-height: calc(92dvh - 200px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.draft-card {
+  padding: 16px;
+  border: 1.5px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 251, 244, 0.72);
+  transition: border-color 200ms, box-shadow 200ms;
+}
+
+.draft-card:hover {
+  border-color: var(--line-strong);
+}
+
+.draft-needs-time {
+  border-color: rgba(231, 76, 60, 0.5);
+  background: rgba(255, 246, 244, 0.85);
+  box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.08);
+  animation: pulse-border 1.5s ease-in-out 2;
+}
+
+.draft-card-top {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.draft-title-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+  font-family: inherit;
+}
+
+.draft-title-input:focus {
+  border-color: var(--orange);
+  outline: none;
+}
+
+.draft-remove-btn {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(200, 180, 160, 0.18);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 150ms, color 150ms;
+}
+
+.draft-remove-btn:hover {
+  background: rgba(231, 76, 60, 0.12);
+  color: #c0392b;
+}
+
+.draft-card-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.draft-field {
+  display: flex;
+  flex: 1;
+  min-width: 110px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.draft-field > span {
+  color: #6b6059;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.draft-field input,
+.draft-field select {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.draft-field input:focus,
+.draft-field select:focus {
+  border-color: var(--orange);
+  outline: none;
+}
+
+.draft-field-required > span {
+  color: #c0392b;
+  font-weight: 750;
+}
+
+.draft-field-required input[type="time"] {
+  border-color: #e74c3c;
+  background: rgba(231, 76, 60, 0.06);
+}
+
+.save-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Dark mode additions ─────────────────────────────────────────────────── */
+
+[data-theme="dark"] .ai-text-input,
+[data-theme="dark"] .draft-title-input,
+[data-theme="dark"] .draft-field input,
+[data-theme="dark"] .draft-field select {
+  background: rgba(38, 32, 24, 0.9);
+  border-color: rgba(120, 100, 70, 0.4);
+  color: var(--ink);
+}
+
+[data-theme="dark"] .draft-card {
+  background: rgba(38, 32, 24, 0.7);
+  border-color: rgba(120, 100, 70, 0.3);
+}
+
+[data-theme="dark"] .draft-needs-time {
+  background: rgba(80, 20, 10, 0.5);
+  border-color: rgba(231, 76, 60, 0.4);
+}
+
+[data-theme="dark"] .draft-remove-btn {
+  background: rgba(80, 70, 55, 0.3);
+}
