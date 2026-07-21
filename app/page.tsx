@@ -1100,7 +1100,7 @@ Text: "${text}"`;
       )}
 
       {showKeyInput && (
-        <div className="sheet-layer" role="dialog" aria-modal="true" aria-label="Mistral API Key">
+        <div className="sheet-layer key-layer" role="dialog" aria-modal="true" aria-label="Mistral API Key">
           <button className="sheet-backdrop" type="button" onClick={() => setShowKeyInput(false)} aria-label="Đóng" />
           <div className="key-modal">
             <div className="sheet-handle" aria-hidden="true" />

@@ -1071,6 +1071,81 @@ p {
   display: block;
 }
 
+.key-layer {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.key-modal {
+  position: relative;
+  z-index: 1;
+  width: min(460px, calc(100% - 32px));
+  padding: 28px 26px 26px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--paper-light);
+  box-shadow: var(--shadow);
+  animation: sheet-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.key-modal-header {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 20px;
+  color: var(--orange);
+}
+
+.key-modal-header > div h2 {
+  margin: 0 0 3px;
+  font-family: var(--serif);
+  font-size: 24px;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+
+.key-modal-header > div p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.key-input {
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  font-size: 14px;
+  color: var(--ink);
+  margin-bottom: 10px;
+}
+
+.key-input:focus {
+  outline: 2px solid var(--orange);
+  outline-offset: -1px;
+}
+
+.key-hint {
+  margin: 0 0 20px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.key-hint a {
+  color: var(--orange);
+  text-decoration: none;
+}
+
+.key-hint a:hover {
+  text-decoration: underline;
+}
+
 .sheet-backdrop {
   position: absolute;
   inset: 0;
