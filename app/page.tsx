@@ -1125,7 +1125,7 @@ Text: "${text}"`;
         const isMulti = aiDrafts.length > 1;
         const canAddAll = aiDrafts.every(d => /^\d{2}:\d{2}$/.test(d.time) && d.time !== "00:00" && d.title.trim());
         return (
-          <div className="sheet-layer composer-layer" role="dialog" aria-modal="true" aria-label="Thêm công việc mới">
+          <div className={`sheet-layer composer-layer${isMulti ? " multi-layer" : ""}`} role="dialog" aria-modal="true" aria-label="Thêm công việc mới">
             <button className="sheet-backdrop" type="button" onClick={() => { setComposerOpen(false); resetAiState(); }} aria-label="Đóng biểu mẫu" />
 
             {/* ── MULTI-TASK VIEW ──────────────────────────────────────── */}
