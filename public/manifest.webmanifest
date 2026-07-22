@@ -1,0 +1,21 @@
+{
+  "name": "Nhịp Ngày",
+  "short_name": "Nhịp Ngày",
+  "description": "Lập kế hoạch, chuẩn bị và hoàn thành công việc theo nhịp riêng của bạn",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4ebdd",
+  "theme_color": "#F4EBDD",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "lifestyle"],
+  "lang": "vi",
+  "dir": "ltr"
+}
