@@ -2,6 +2,10 @@ import { and, eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { getDb } from "@/db";
 import { userStores } from "@/db/schema";
+import { ApiError } from "@/lib/api-error";
+import { requireAppSession } from "@/lib/server-auth";
+
+export { ApiError } from "@/lib/api-error";
 
 export type ServerData = {
   tasks: unknown[];
@@ -17,19 +21,11 @@ export type UserStore = {
   updatedAt: number;
 };
 
-const USER_EMAIL_HEADER = "oai-authenticated-user-email";
 const MAX_DATA_BYTES = 1_500_000;
 
 export async function requireOwnerId(request: NextRequest): Promise<string> {
-  const email = request.headers.get(USER_EMAIL_HEADER)?.trim().toLowerCase();
-  if (!email) {
-    if (process.env.NODE_ENV !== "production") return "local-development-user";
-    throw new ApiError(401, "Bạn cần đăng nhập để đồng bộ dữ liệu.");
-  }
-
-  const bytes = new TextEncoder().encode(email);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  await requireAppSession(request);
+  return "primary-account";
 }
 
 export async function getUserStore(ownerId: string): Promise<UserStore | null> {
@@ -156,15 +152,13 @@ export function validateServerData(value: unknown): ServerData {
   return data;
 }
 
-export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
-    super(message);
-  }
-}
-
 export function apiErrorResponse(error: unknown): Response {
-  if (error instanceof ApiError) {
-    return Response.json({ error: error.message }, { status: error.status });
+  if (error && typeof error === "object" && "status" in error && "message" in error) {
+    const status = Number(error.status);
+    const message = String(error.message);
+    if (Number.isInteger(status) && status >= 400 && status <= 599 && message) {
+      return Response.json({ error: message }, { status });
+    }
   }
   const messages: string[] = [];
   let current: unknown = error;

@@ -1,7 +1,7 @@
-// Nhịp Ngày — Service Worker v3
+// Nhịp Ngày — Service Worker v4
 // Cache strategy: shell + dynamic caching, offline fallback
 
-const CACHE_NAME = "nhip-ngay-shell-v3";
+const CACHE_NAME = "nhip-ngay-shell-v4";
 const SHELL = ["/", "/manifest.webmanifest", "/favicon.svg"];
 
 // ── Install: cache shell ──────────────────────────────────────────────────────

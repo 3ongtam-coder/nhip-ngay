@@ -396,6 +396,10 @@ export default function HomePage() {
   // Account-based server storage state
   const [serverReady, setServerReady] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [authRequired, setAuthRequired] = useState(false);
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const serverVersionRef = React.useRef(0);
   const lastServerDataRef = React.useRef<ServerSnapshot | null>(null);
   const lastServerFingerprintRef = React.useRef("");
@@ -448,8 +452,10 @@ export default function HomePage() {
     setTheme(t => t === "light" ? "dark" : "light");
   }
 
-  function redirectToSignIn() {
-    window.location.assign("/signin-with-chatgpt?return_to=%2F");
+  function requestLogin() {
+    setServerReady(false);
+    setAuthRequired(true);
+    setLoginError("");
   }
 
   function applyServerSnapshot(snapshot: ServerSnapshot, updatedAt: number) {
@@ -469,7 +475,7 @@ export default function HomePage() {
     try {
       const response = await fetch("/api/sync", { cache: "no-store" });
       if (response.status === 401) {
-        redirectToSignIn();
+        requestLogin();
         return;
       }
       if (!response.ok) throw new Error("server unavailable");
@@ -483,6 +489,10 @@ export default function HomePage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ data: localSnapshot, expectedUpdatedAt: 0 }),
         });
+        if (migration.status === 401) {
+          requestLogin();
+          return;
+        }
         if (!migration.ok) throw new Error("migration failed");
         const migrated = await migration.json() as { data: ServerSnapshot; updatedAt: number; hasApiKey: boolean };
         applyServerSnapshot(migrated.data, migrated.updatedAt);
@@ -495,17 +505,50 @@ export default function HomePage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ key: savedKey }),
         });
+        if (keyMigration.status === 401) {
+          requestLogin();
+          return;
+        }
         if (keyMigration.ok) {
           result.hasApiKey = true;
           localStorage.removeItem("nhip-ngay-mistral-key");
         }
       }
       setKeyOnline(result.hasApiKey);
+      setAuthRequired(false);
       setServerReady(true);
     } catch {
       setToast("Chưa kết nối được kho dữ liệu máy chủ. Dữ liệu vẫn được giữ trên máy này.");
     } finally {
       setIsSyncing(false);
+    }
+  }
+
+  async function signIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!loginPassword || isLoggingIn) return;
+    setIsLoggingIn(true);
+    setLoginError("");
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: loginPassword }),
+      });
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) {
+        setLoginError(result.error ?? "Không thể đăng nhập. Vui lòng thử lại.");
+        return;
+      }
+
+      setLoginPassword("");
+      setAuthRequired(false);
+      const savedKey = localStorage.getItem("nhip-ngay-mistral-key")?.trim() ?? "";
+      await initializeServer(currentSnapshotRef.current, savedKey);
+    } catch {
+      setLoginError("Không kết nối được máy chủ. Vui lòng kiểm tra mạng.");
+    } finally {
+      setIsLoggingIn(false);
     }
   }
 
@@ -641,7 +684,7 @@ export default function HomePage() {
         body: JSON.stringify({ data: snapshot, expectedUpdatedAt: serverVersionRef.current }),
       });
       if (response.status === 401) {
-        redirectToSignIn();
+        requestLogin();
         return;
       }
       const result = await response.json() as { data?: ServerSnapshot; updatedAt?: number };
@@ -676,7 +719,7 @@ export default function HomePage() {
     try {
       const response = await fetch("/api/sync", { cache: "no-store" });
       if (response.status === 401) {
-        redirectToSignIn();
+        requestLogin();
         return;
       }
       if (!response.ok) throw new Error("pull failed");
@@ -820,6 +863,10 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, today: todayStr }),
       });
+      if (res.status === 401) {
+        requestLogin();
+        return;
+      }
       if (res.status === 409) {
         setKeyOnline(false);
         setShowKeyInput(true);
@@ -869,7 +916,7 @@ export default function HomePage() {
         body: JSON.stringify({ key }),
       });
       if (response.status === 401) {
-        redirectToSignIn();
+        requestLogin();
         return;
       }
       if (!response.ok) throw new Error("save key failed");
@@ -1659,6 +1706,42 @@ export default function HomePage() {
         );
       })()}
 
+      {authRequired && (
+        <div className="sheet-layer key-layer" role="dialog" aria-modal="true" aria-label="Đăng nhập Nhịp Ngày">
+          <div className="sheet-backdrop" aria-hidden="true" />
+          <form className="key-modal" onSubmit={signIn}>
+            <div className="sheet-handle" aria-hidden="true" />
+            <div className="key-modal-header">
+              <KeyRound size={26} />
+              <div>
+                <h2>Đăng nhập Nhịp Ngày</h2>
+                <p>Nhập cùng một mật khẩu trên máy tính và điện thoại để dùng chung công việc và API key.</p>
+              </div>
+            </div>
+            <input
+              className="key-input"
+              type="password"
+              autoComplete="current-password"
+              placeholder="Mật khẩu ứng dụng"
+              value={loginPassword}
+              onChange={(event) => {
+                setLoginPassword(event.target.value);
+                if (loginError) setLoginError("");
+              }}
+              autoFocus
+              required
+            />
+            {loginError && <p className="login-error" role="alert">{loginError}</p>}
+            <p className="key-hint">Đây là mật khẩu riêng bạn đã đặt trong GitHub Secret, không phải mật khẩu ChatGPT.</p>
+            <div className="composer-footer">
+              <button className="save-button" type="submit" disabled={!loginPassword || isLoggingIn}>
+                {isLoggingIn ? <Loader2 className="spin" size={18} /> : <KeyRound size={18} />}
+                {isLoggingIn ? "Đang đăng nhập..." : "Đăng nhập"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {showKeyInput && (
         <div className="sheet-layer key-layer" role="dialog" aria-modal="true" aria-label="Mistral API Key">

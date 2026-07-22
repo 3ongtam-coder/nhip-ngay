@@ -1194,6 +1194,13 @@ p {
   text-decoration: none;
 }
 
+.login-error {
+  margin: 0;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .key-hint a:hover {
   text-decoration: underline;
 }
@@ -2566,4 +2573,3 @@ p {
   font-size: 12px;
   font-weight: 700;
 }
-
