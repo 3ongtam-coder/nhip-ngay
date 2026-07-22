@@ -360,7 +360,9 @@ export default function HomePage() {
   const [syncInput, setSyncInput] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
+  const lastSyncTimeRef = React.useRef<number>(0);
   const syncTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
 
   const today = dateKey();
   const todayTasks = useMemo(
@@ -546,6 +548,7 @@ export default function HomePage() {
       if (res.ok) {
         const data = await res.json() as { updatedAt: number };
         setLastSyncTime(data.updatedAt);
+        lastSyncTimeRef.current = data.updatedAt;
       }
     } catch {
       // Silently handle offline/sync network errors
@@ -561,12 +564,15 @@ export default function HomePage() {
       const res = await fetch(`/api/sync?code=${encodeURIComponent(codeToUse)}`);
       if (!res.ok) throw new Error("Sync failed");
       const json = await res.json() as { code: string; data: { tasks?: Task[]; reflection?: Reflection; history?: HistoryData } | null; updatedAt: number };
-      if (json.data && Array.isArray(json.data.tasks) && json.data.tasks.length > 0) {
-        setTasks(json.data.tasks);
-        if (json.data.reflection) setReflection(json.data.reflection);
-        if (json.data.history) setHistory(json.data.history);
-        setLastSyncTime(json.updatedAt);
-        if (isManual) setToast(`Đã tải dữ liệu từ mã ${codeToUse}!`);
+      if (json.data && Array.isArray(json.data.tasks)) {
+        if (isManual || json.updatedAt > lastSyncTimeRef.current) {
+          setTasks(json.data.tasks);
+          if (json.data.reflection) setReflection(json.data.reflection);
+          if (json.data.history) setHistory(json.data.history);
+          setLastSyncTime(json.updatedAt);
+          lastSyncTimeRef.current = json.updatedAt;
+          if (isManual) setToast(`Đã đồng bộ dữ liệu từ mã ${codeToUse}!`);
+        }
       } else if (isManual) {
         pushSync(codeToUse, { tasks, reflection, history });
         setToast(`Mã ${codeToUse} mới — đã tải dữ liệu hiện tại lên!`);
