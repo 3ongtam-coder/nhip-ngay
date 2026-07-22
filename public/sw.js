@@ -66,9 +66,10 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets (_next/static, fonts, images): cache-first
+  // Static assets (_next/static for Next.js, /assets/ for Vite/vinext, fonts, images)
   const isStatic =
     url.pathname.startsWith("/_next/static/") ||
+    url.pathname.startsWith("/assets/") ||
     url.pathname.startsWith("/_next/image") ||
     url.pathname.match(/\.(js|css|woff2?|ttf|svg|png|ico|webp|avif)$/);
 
