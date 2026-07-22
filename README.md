@@ -108,9 +108,11 @@ API key are migrated to the account store. The key is never returned by the key
 API, and Mistral requests are proxied through `/api/ai`.
 
 The initial schema is in `drizzle/0000_chemical_proteus.sql`. For local D1
-testing, run `npx wrangler d1 migrations apply site-creator-d1 --local`. A Sites
-deployment uses `.openai/hosting.json` to provision the `DB` binding and applies
-the checked-in migration.
+testing, run
+`npx wrangler d1 migrations apply site-creator-d1 --local --config wrangler.local.toml`.
+The separate local config prevents the `DB` binding from being declared twice
+in production. A Sites deployment uses `.openai/hosting.json` to provision the
+binding and applies the checked-in migration.
 
 Use build and validation commands for targeted diagnosis after a remote failure, not as part of the normal checkpoint path.
 
