@@ -539,11 +539,12 @@ export default function HomePage() {
   async function pushSync(codeToUse: string, payload: { tasks: Task[]; reflection: Reflection; history: HistoryData; mistralKey?: string }) {
     if (!codeToUse || !online) return;
     setIsSyncing(true);
+    const activeKey = (payload.mistralKey || mistralKey || (typeof window !== "undefined" ? localStorage.getItem("nhip-ngay-mistral-key") : "") || "").trim();
     const dataToPush = {
       tasks: payload.tasks,
       reflection: payload.reflection,
       history: payload.history,
-      mistralKey: (payload.mistralKey ?? mistralKey).trim(),
+      mistralKey: activeKey,
     };
     try {
       const res = await fetch("/api/sync", {
@@ -570,25 +571,34 @@ export default function HomePage() {
       const res = await fetch(`/api/sync?code=${encodeURIComponent(codeToUse)}`);
       if (!res.ok) throw new Error("Sync failed");
       const json = await res.json() as { code: string; data: { tasks?: Task[]; reflection?: Reflection; history?: HistoryData; mistralKey?: string } | null; updatedAt: number };
-      if (json.data && Array.isArray(json.data.tasks)) {
-        if (isManual || json.updatedAt > lastSyncTimeRef.current) {
-          setTasks(json.data.tasks);
-          if (json.data.reflection) setReflection(json.data.reflection);
-          if (json.data.history) setHistory(json.data.history);
-          if (json.data.mistralKey && json.data.mistralKey.trim()) {
-            const k = json.data.mistralKey.trim();
-            setMistralKey(k);
-            setKeyOnline(true);
-            try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {}
-            fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k }) }).catch(() => {});
-          }
-          setLastSyncTime(json.updatedAt);
-          lastSyncTimeRef.current = json.updatedAt;
-          if (isManual) setToast(`Đã đồng bộ dữ liệu từ mã ${codeToUse}!`);
+      
+      if (json.data) {
+        // Sync API Key if available from server and not yet set locally
+        if (json.data.mistralKey && json.data.mistralKey.trim()) {
+          const k = json.data.mistralKey.trim();
+          setMistralKey(k);
+          setKeyOnline(true);
+          try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {}
+          fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k }) }).catch(() => {});
         }
-      } else if (isManual) {
+
+        // Only adopt tasks if server has non-empty tasks OR if server data is genuinely newer
+        if (Array.isArray(json.data.tasks) && json.data.tasks.length > 0) {
+          if (isManual || json.updatedAt > lastSyncTimeRef.current) {
+            setTasks(json.data.tasks);
+            if (json.data.reflection) setReflection(json.data.reflection);
+            if (json.data.history) setHistory(json.data.history);
+            setLastSyncTime(json.updatedAt);
+            lastSyncTimeRef.current = json.updatedAt;
+            if (isManual) setToast(`Đã đồng bộ dữ liệu từ mã ${codeToUse}!`);
+          }
+        } else if (tasks.length > 0) {
+          // If server data has 0 tasks but local device has tasks, push local tasks to server
+          pushSync(codeToUse, { tasks, reflection, history, mistralKey });
+        }
+      } else if (isManual || tasks.length > 0) {
         pushSync(codeToUse, { tasks, reflection, history, mistralKey });
-        setToast(`Mã ${codeToUse} mới — đã tải dữ liệu hiện tại lên!`);
+        if (isManual) setToast(`Mã ${codeToUse} mới — đã tải dữ liệu hiện tại lên!`);
       }
     } catch {
       if (isManual) setToast("Không thể kết nối máy chủ đồng bộ.");
@@ -687,7 +697,16 @@ export default function HomePage() {
   }
 
   async function callMistralAI(text: string) {
-    const key = mistralKey.trim();
+    let key = mistralKey.trim();
+    if (!key) {
+      try {
+        const savedKey = localStorage.getItem("nhip-ngay-mistral-key");
+        if (savedKey && savedKey.trim()) {
+          key = savedKey.trim();
+          setMistralKey(key);
+        }
+      } catch {}
+    }
     if (!key) { setShowKeyInput(true); return; }
     setIsAnalyzing(true);
     const todayStr = dateKey();
