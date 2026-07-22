@@ -2525,3 +2525,74 @@ p {
 [data-theme="dark"] .draft-remove-btn {
   background: rgba(80, 70, 55, 0.3);
 }
+
+/* ── Notify toggle button ─────────────────────────────────────────────── */
+
+.notify-toggle {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 160ms, color 160ms, background 160ms;
+}
+
+.notify-toggle:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.notify-toggle.notify-on {
+  border-color: var(--orange);
+  background: var(--orange);
+  color: white;
+  box-shadow: 0 4px 12px rgba(240, 90, 40, 0.25);
+}
+
+[data-theme="dark"] .notify-toggle {
+  border-color: rgba(120, 100, 70, 0.5);
+  color: var(--faint);
+}
+
+/* ── Key modal extras ───────────────────────────────────────────────── */
+
+.key-online-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.key-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  font-family: inherit;
+  transition: border-color 150ms, color 150ms, background 150ms;
+}
+
+.key-copy-btn:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+  background: rgba(240, 90, 40, 0.04);
+}
+
+[data-theme="dark"] .key-copy-btn {
+  border-color: rgba(120, 100, 70, 0.4);
+  color: var(--faint);
+}

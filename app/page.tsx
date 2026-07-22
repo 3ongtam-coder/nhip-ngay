@@ -2,6 +2,8 @@
 
 import {
   BarChart3,
+  Bell,
+  BellOff,
   Brain,
   BriefcaseBusiness,
   CalendarDays,
@@ -9,6 +11,7 @@ import {
   ChevronRight,
   Circle,
   Clock3,
+  Clipboard,
   Flame,
   Flag,
   GraduationCap,
@@ -332,6 +335,7 @@ export default function HomePage() {
 
   // Voice + AI state
   const [mistralKey, setMistralKey] = useState("");
+  const [keyOnline, setKeyOnline] = useState(false);         // true khi key đã lưu trên server
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -341,6 +345,13 @@ export default function HomePage() {
   const [formKey, setFormKey] = useState(0);
   const [keyInputValue, setKeyInputValue] = useState("");
   const srRef = React.useRef<SpeechRecognitionInstance | null>(null);
+
+  // Notification state
+  const [notifyEnabled, setNotifyEnabled] = useState(false);
+  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission>("default");
+  const [notifyLeadMin, setNotifyLeadMin] = useState(15); // phút nhắc trước
+  const notifyTimers = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const [showNotifySettings, setShowNotifySettings] = useState(false);
 
   const today = dateKey();
   const todayTasks = useMemo(
@@ -407,12 +418,32 @@ export default function HomePage() {
         const resolved = savedTheme ?? preferred;
         setTheme(resolved);
         document.documentElement.setAttribute("data-theme", resolved);
+        // Load notification settings
+        const savedLeadMin = localStorage.getItem("nhip-ngay-notify-lead");
+        if (savedLeadMin) setNotifyLeadMin(Number(savedLeadMin));
+        const savedNotifyEnabled = localStorage.getItem("nhip-ngay-notify-enabled");
+        if (savedNotifyEnabled === "1") setNotifyEnabled(true);
       } catch {
         // Keep the safe starter data when local storage is unavailable or malformed.
       }
-      // Load Mistral API key
-      const savedKey = localStorage.getItem("nhip-ngay-mistral-key");
-      if (savedKey) setMistralKey(savedKey);
+      // Load Mistral API key — ưu tiên cookie (server) > localStorage (offline fallback)
+      fetch("/api/key")
+        .then(r => r.json() as Promise<{ key: string }>)
+        .then(({ key }) => {
+          if (key) { setMistralKey(key); setKeyOnline(true); }
+          else {
+            const savedKey = localStorage.getItem("nhip-ngay-mistral-key");
+            if (savedKey) setMistralKey(savedKey);
+          }
+        })
+        .catch(() => {
+          const savedKey = localStorage.getItem("nhip-ngay-mistral-key");
+          if (savedKey) setMistralKey(savedKey);
+        });
+      // Check notification permission
+      if (typeof Notification !== "undefined") {
+        setNotifyPermission(Notification.permission);
+      }
       setOnline(navigator.onLine);
       setHydrated(true);
     });
@@ -429,6 +460,58 @@ export default function HomePage() {
       window.removeEventListener("offline", goOffline);
     };
   }, []);
+
+  // ── Schedule notifications when tasks / settings change ──────────────────────
+  useEffect(() => {
+    // Cancel all existing timers
+    notifyTimers.current.forEach(id => clearTimeout(id));
+    notifyTimers.current.clear();
+
+    if (!notifyEnabled || notifyPermission !== "granted") return;
+
+    const now = Date.now();
+    const todayStr = dateKey();
+
+    tasks.forEach(task => {
+      if (task.done) return;
+      if (task.date !== todayStr) return;
+      if (!task.time || !/^\d{2}:\d{2}$/.test(task.time)) return;
+
+      const [h, m] = task.time.split(":").map(Number);
+      const taskMs = new Date().setHours(h, m, 0, 0);
+      const fireMs = taskMs - notifyLeadMin * 60 * 1000;
+      const delay = fireMs - now;
+      if (delay <= 0) return; // đã qua giờ
+
+      const id = setTimeout(() => {
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          const n = new Notification("\u23F0 Nhịp Ngày — Sắp đến giờ!", {
+            body: `《${task.title}》 sẽ bắt đầu sau ${notifyLeadMin} phút`,
+            icon: "/favicon.svg",
+            tag: task.id,
+            silent: false,
+          });
+          n.onclick = () => { window.focus(); n.close(); };
+        }
+        // Also notify via SW for background support
+        navigator.serviceWorker.ready.then(reg => {
+          reg.showNotification("\u23F0 Nhịp Ngày — Sắp đến giờ!", {
+            body: `《${task.title}》 sẽ bắt đầu sau ${notifyLeadMin} phút`,
+            icon: "/favicon.svg",
+            tag: task.id,
+            data: { url: "/" },
+          });
+        }).catch(() => {});
+      }, delay);
+
+      notifyTimers.current.set(task.id, id);
+    });
+
+    return () => {
+      notifyTimers.current.forEach(id => clearTimeout(id));
+      notifyTimers.current.clear();
+    };
+  }, [tasks, notifyEnabled, notifyPermission, notifyLeadMin]);
 
   // Persist theme + apply to DOM
   useEffect(() => {
@@ -941,6 +1024,40 @@ Text: "${text}"`;
             {online ? <Wifi size={16} /> : <WifiOff size={16} />}
             <span>{online ? "Đã lưu" : "Ngoại tuyến"}</span>
           </span>
+          {/* Notification toggle */}
+          <button
+            type="button"
+            className={`notify-toggle${notifyEnabled && notifyPermission === "granted" ? " notify-on" : ""}`}
+            onClick={() => {
+              if (notifyPermission === "denied") {
+                setToast("Thông báo bị chặn — vào Settings → Site Settings → Notifications để bật.");
+                return;
+              }
+              if (notifyPermission === "default" || !notifyEnabled) {
+                Notification.requestPermission().then(perm => {
+                  setNotifyPermission(perm);
+                  if (perm === "granted") {
+                    setNotifyEnabled(true);
+                    localStorage.setItem("nhip-ngay-notify-enabled", "1");
+                    setShowNotifySettings(true);
+                    setToast("Đã bật nhắc nhở — sẽ báo trước giờ làm việc!");
+                  } else {
+                    setToast("Không được phép gửi thông báo.");
+                  }
+                });
+                return;
+              }
+              // Toggle off
+              const next = !notifyEnabled;
+              setNotifyEnabled(next);
+              localStorage.setItem("nhip-ngay-notify-enabled", next ? "1" : "0");
+              setToast(next ? "Đã bật nhắc nhở." : "Đã tắt nhắc nhở.");
+            }}
+            title={notifyPermission === "denied" ? "Thông báo bị chặn" : notifyEnabled ? "Tắt nhắc nhở" : "Bật nhắc nhở"}
+            aria-label="Toggle nhắc nhở công việc"
+          >
+            {notifyPermission === "denied" || !notifyEnabled ? <BellOff size={17} /> : <Bell size={17} />}
+          </button>
           <button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "Chuyển sang sáng" : "Chuyển sang tối"}>
             {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
           </button>
@@ -1314,18 +1431,120 @@ Text: "${text}"`;
           <button className="sheet-backdrop" type="button" onClick={() => setShowKeyInput(false)} aria-label="Đóng" />
           <div className="key-modal">
             <div className="sheet-handle" aria-hidden="true" />
-            <div className="key-modal-header"><Brain size={26} /><div><h2>Mistral API Key</h2><p>Key lưu trên thiết bị này, không gửi đi đâu.</p></div></div>
-            <input id="mistral-key-input" className="key-input" type="password" placeholder="Dán API key vào đây..." value={keyInputValue} onChange={e => setKeyInputValue(e.target.value)} autoFocus
-              onKeyDown={e => { if (e.key === "Enter") { const k = keyInputValue.trim(); if (!k) return; setMistralKey(k); try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {} setKeyInputValue(""); setShowKeyInput(false); setToast("Đã lưu API key."); }}}
+            <div className="key-modal-header">
+              <Brain size={26} />
+              <div>
+                <h2>Mistral API Key</h2>
+                <p>{keyOnline ? <span className="key-online-badge">✅ Đã lưu trên máy chủ — đăng nhập lại tự điền</span> : "Key lưu trên thiết bị này, không gửi đi đâu."}</p>
+              </div>
+            </div>
+
+            {/* Input key */}
+            <input
+              id="mistral-key-input"
+              className="key-input"
+              type="password"
+              placeholder="Dán API key vào đây..."
+              value={keyInputValue}
+              onChange={e => setKeyInputValue(e.target.value)}
+              autoFocus
+              onKeyDown={e => {
+                if (e.key === "Enter") {
+                  const k = keyInputValue.trim();
+                  if (!k) return;
+                  setMistralKey(k);
+                  try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {}
+                  // Save to server cookie
+                  fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k }) })
+                    .then(() => setKeyOnline(true)).catch(() => {});
+                  setKeyInputValue("");
+                  setShowKeyInput(false);
+                  setToast("Đã lưu API key.");
+                }
+              }}
             />
+
+            {/* Copy existing key */}
+            {mistralKey && (
+              <button
+                type="button"
+                className="key-copy-btn"
+                onClick={() => {
+                  navigator.clipboard.writeText(mistralKey)
+                    .then(() => setToast("Đã sao chép key — dán vào máy khác nhé!"))
+                    .catch(() => setToast("Không sao chép được, hãy sao chép thủ công."));
+                }}
+                aria-label="Sao chép API key"
+              >
+                <Clipboard size={15} /> Sao chép key hiện tại sang máy khác
+              </button>
+            )}
+
             <p className="key-hint">Lấy key tại <a href="https://console.mistral.ai" target="_blank" rel="noreferrer">console.mistral.ai</a> → API Keys</p>
             <div className="composer-footer">
               <button type="button" className="ghost-button" onClick={() => setShowKeyInput(false)}>Hủy</button>
-              <button type="button" className="save-button" onClick={() => { const k = keyInputValue.trim(); if (!k) return; setMistralKey(k); try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {} setKeyInputValue(""); setShowKeyInput(false); setToast("Đã lưu API key."); }}><Check size={18} /> Lưu key</button>
+              <button
+                type="button"
+                className="save-button"
+                onClick={() => {
+                  const k = keyInputValue.trim();
+                  if (!k) return;
+                  setMistralKey(k);
+                  try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {}
+                  fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k }) })
+                    .then(() => setKeyOnline(true)).catch(() => {});
+                  setKeyInputValue("");
+                  setShowKeyInput(false);
+                  setToast("Đã lưu API key.");
+                }}
+              ><Check size={18} /> Lưu key</button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ── Notify settings modal ── */}
+      {showNotifySettings && (
+        <div className="sheet-layer key-layer" role="dialog" aria-modal="true" aria-label="Cài đặt nhắc nhở">
+          <button className="sheet-backdrop" type="button" onClick={() => setShowNotifySettings(false)} aria-label="Đóng" />
+          <div className="key-modal">
+            <div className="sheet-handle" aria-hidden="true" />
+            <div className="key-modal-header">
+              <Bell size={26} />
+              <div><h2>Cài đặt nhắc nhở</h2><p>Sẽ thông báo trước giờ bắt đầu công việc.</p></div>
+            </div>
+            <label className="field" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--muted)" }}>Nhắc trước bao nhiêu phút?</span>
+              <select
+                value={notifyLeadMin}
+                onChange={e => {
+                  const v = Number(e.target.value);
+                  setNotifyLeadMin(v);
+                  try { localStorage.setItem("nhip-ngay-notify-lead", String(v)); } catch {}
+                }}
+                style={{ padding: "10px 12px", borderRadius: 10, border: "1.5px solid var(--line-strong)", fontSize: 14, background: "white", fontFamily: "inherit" }}
+              >
+                <option value={5}>5 phút trước</option>
+                <option value={10}>10 phút trước</option>
+                <option value={15}>15 phút trước</option>
+                <option value={20}>20 phút trước</option>
+                <option value={30}>30 phút trước</option>
+              </select>
+            </label>
+            <p className="key-hint">Hiện đang nhắc <strong>{notifyLeadMin} phút</strong> trước giờ bắt đầu mỗi việc có giờ đặt.</p>
+            <div className="composer-footer">
+              <button type="button" className="ghost-button" onClick={() => {
+                setNotifyEnabled(false);
+                localStorage.setItem("nhip-ngay-notify-enabled", "0");
+                setShowNotifySettings(false);
+                setToast("Đã tắt nhắc nhở.");
+              }}>Tắt nhắc nhở</button>
+              <button type="button" className="save-button" onClick={() => setShowNotifySettings(false)}><Check size={18} /> Xác nhận</button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {focus && (
         <div className="focus-dock" aria-live="polite">
