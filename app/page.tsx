@@ -11,7 +11,6 @@ import {
   ChevronRight,
   Circle,
   Clock3,
-  Clipboard,
   Flame,
   Flag,
   GraduationCap,
@@ -28,7 +27,6 @@ import {
   Pause,
   Play,
   Plus,
-  RefreshCw,
   Search,
   Sparkles,
   Sun,
@@ -124,6 +122,48 @@ const THEME_KEY = "nhip-ngay-theme-v1";
 
 type DayRecord = { total: number; done: number };
 type HistoryData = { [date: string]: DayRecord };
+type ServerSnapshot = { tasks: Task[]; reflection: Reflection; history: HistoryData };
+
+function snapshotFingerprint(snapshot: ServerSnapshot) {
+  return JSON.stringify(snapshot);
+}
+
+function mergeServerSnapshots(base: ServerSnapshot, local: ServerSnapshot, remote: ServerSnapshot): ServerSnapshot {
+  const baseTasks = new Map(base.tasks.map(task => [task.id, task]));
+  const localTasks = new Map(local.tasks.map(task => [task.id, task]));
+  const remoteTasks = new Map(remote.tasks.map(task => [task.id, task]));
+  const mergedTasks: Task[] = [];
+
+  for (const id of new Set([...baseTasks.keys(), ...localTasks.keys(), ...remoteTasks.keys()])) {
+    const original = baseTasks.get(id);
+    const localTask = localTasks.get(id);
+    const remoteTask = remoteTasks.get(id);
+    const localChanged = JSON.stringify(localTask) !== JSON.stringify(original);
+    const remoteChanged = JSON.stringify(remoteTask) !== JSON.stringify(original);
+    const chosen = localChanged ? localTask : remoteChanged ? remoteTask : localTask ?? remoteTask;
+    if (chosen) mergedTasks.push(chosen);
+  }
+  mergedTasks.sort((a, b) => a.createdAt - b.createdAt);
+
+  const mergeField = <T,>(original: T, localValue: T, remoteValue: T) =>
+    JSON.stringify(localValue) !== JSON.stringify(original) ? localValue : remoteValue;
+  const historyKeys = new Set([...Object.keys(base.history), ...Object.keys(local.history), ...Object.keys(remote.history)]);
+  const mergedHistory: HistoryData = {};
+  for (const key of historyKeys) {
+    const value = mergeField(base.history[key], local.history[key], remote.history[key]);
+    if (value) mergedHistory[key] = value;
+  }
+
+  return {
+    tasks: mergedTasks,
+    reflection: {
+      win: mergeField(base.reflection.win, local.reflection.win, remote.reflection.win),
+      improve: mergeField(base.reflection.improve, local.reflection.improve, remote.reflection.improve),
+      tomorrow: mergeField(base.reflection.tomorrow, local.reflection.tomorrow, remote.reflection.tomorrow),
+    },
+    history: mergedHistory,
+  };
+}
 
 function calcStreak(history: HistoryData): number {
   let streak = 0;
@@ -335,8 +375,7 @@ export default function HomePage() {
   const prevCompletedRef = React.useRef(0);
 
   // Voice + AI state
-  const [mistralKey, setMistralKey] = useState("");
-  const [keyOnline, setKeyOnline] = useState(false);         // true khi key đã lưu trên server
+  const [keyOnline, setKeyOnline] = useState(false);
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -354,13 +393,14 @@ export default function HomePage() {
   const notifyTimers = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [showNotifySettings, setShowNotifySettings] = useState(false);
 
-  // Cross-device sync state
-  const [syncCode, setSyncCode] = useState("");
-  const [showSyncModal, setShowSyncModal] = useState(false);
-  const [syncInput, setSyncInput] = useState("");
+  // Account-based server storage state
+  const [serverReady, setServerReady] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
-  const lastSyncTimeRef = React.useRef<number>(0);
+  const serverVersionRef = React.useRef(0);
+  const lastServerDataRef = React.useRef<ServerSnapshot | null>(null);
+  const lastServerFingerprintRef = React.useRef("");
+  const currentSnapshotRef = React.useRef<ServerSnapshot>({ tasks, reflection, history });
+  const syncInFlightRef = React.useRef(false);
   const syncTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
@@ -408,21 +448,93 @@ export default function HomePage() {
     setTheme(t => t === "light" ? "dark" : "light");
   }
 
+  function redirectToSignIn() {
+    window.location.assign("/signin-with-chatgpt?return_to=%2F");
+  }
+
+  function applyServerSnapshot(snapshot: ServerSnapshot, updatedAt: number) {
+    const fingerprint = snapshotFingerprint(snapshot);
+    lastServerDataRef.current = snapshot;
+    lastServerFingerprintRef.current = fingerprint;
+    serverVersionRef.current = updatedAt;
+    currentSnapshotRef.current = snapshot;
+    setTasks(snapshot.tasks);
+    setReflection(snapshot.reflection);
+    setHistory(snapshot.history);
+    setSelectedId(snapshot.tasks[0]?.id ?? "");
+  }
+
+  async function initializeServer(localSnapshot: ServerSnapshot, savedKey: string) {
+    setIsSyncing(true);
+    try {
+      const response = await fetch("/api/sync", { cache: "no-store" });
+      if (response.status === 401) {
+        redirectToSignIn();
+        return;
+      }
+      if (!response.ok) throw new Error("server unavailable");
+      let result = await response.json() as { data: ServerSnapshot | null; updatedAt: number; hasApiKey: boolean };
+
+      if (result.data) {
+        applyServerSnapshot(result.data, result.updatedAt);
+      } else {
+        const migration = await fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: localSnapshot, expectedUpdatedAt: 0 }),
+        });
+        if (!migration.ok) throw new Error("migration failed");
+        const migrated = await migration.json() as { data: ServerSnapshot; updatedAt: number; hasApiKey: boolean };
+        applyServerSnapshot(migrated.data, migrated.updatedAt);
+        result = migrated;
+      }
+
+      if (!result.hasApiKey && savedKey) {
+        const keyMigration = await fetch("/api/key", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: savedKey }),
+        });
+        if (keyMigration.ok) {
+          result.hasApiKey = true;
+          localStorage.removeItem("nhip-ngay-mistral-key");
+        }
+      }
+      setKeyOnline(result.hasApiKey);
+      setServerReady(true);
+    } catch {
+      setToast("Chưa kết nối được kho dữ liệu máy chủ. Dữ liệu vẫn được giữ trên máy này.");
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
   useEffect(() => {
     const initialize = window.requestAnimationFrame(() => {
+      let localTasks = seedTasks();
+      let localReflection: Reflection = { win: "", improve: "", tomorrow: "" };
+      let localHistory: HistoryData = {};
+      let savedKey = "";
       try {
         const stored = localStorage.getItem(STORAGE_KEY);
         if (stored) {
           const parsed = JSON.parse(stored) as { tasks?: Task[]; reflection?: Reflection };
           if (Array.isArray(parsed.tasks) && parsed.tasks.length) {
-            setTasks(parsed.tasks);
-            setSelectedId(parsed.tasks[0].id);
+            localTasks = parsed.tasks;
+            setTasks(localTasks);
+            setSelectedId(localTasks[0].id);
           }
-          if (parsed.reflection) setReflection(parsed.reflection);
+          if (parsed.reflection) {
+            localReflection = parsed.reflection;
+            setReflection(localReflection);
+          }
         }
         // Load history
         const storedHistory = localStorage.getItem(HISTORY_KEY);
-        if (storedHistory) setHistory(JSON.parse(storedHistory));
+        if (storedHistory) {
+          localHistory = JSON.parse(storedHistory) as HistoryData;
+          setHistory(localHistory);
+        }
         // Load theme
         const savedTheme = localStorage.getItem(THEME_KEY) as "light" | "dark" | null;
         const preferred = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -434,34 +546,11 @@ export default function HomePage() {
         if (savedLeadMin) setNotifyLeadMin(Number(savedLeadMin));
         const savedNotifyEnabled = localStorage.getItem("nhip-ngay-notify-enabled");
         if (savedNotifyEnabled === "1") setNotifyEnabled(true);
-        // Load or initialize sync code
-        let code = localStorage.getItem("nhip-ngay-sync-code");
-        if (!code) {
-          const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-          let rand = "";
-          for (let i = 0; i < 4; i++) rand += chars.charAt(Math.floor(Math.random() * chars.length));
-          code = `NHIP-${rand}`;
-          try { localStorage.setItem("nhip-ngay-sync-code", code); } catch {}
-        }
-        setSyncCode(code);
-        pullSync(code, false);
+        savedKey = localStorage.getItem("nhip-ngay-mistral-key")?.trim() ?? "";
       } catch {
         // Keep the safe starter data when local storage is unavailable or malformed.
       }
-      // Load Mistral API key — ưu tiên cookie (server) > localStorage (offline fallback)
-      fetch("/api/key")
-        .then(r => r.json() as Promise<{ key: string }>)
-        .then(({ key }) => {
-          if (key) { setMistralKey(key); setKeyOnline(true); }
-          else {
-            const savedKey = localStorage.getItem("nhip-ngay-mistral-key");
-            if (savedKey) setMistralKey(savedKey);
-          }
-        })
-        .catch(() => {
-          const savedKey = localStorage.getItem("nhip-ngay-mistral-key");
-          if (savedKey) setMistralKey(savedKey);
-        });
+      void initializeServer({ tasks: localTasks, reflection: localReflection, history: localHistory }, savedKey);
       // Check notification permission
       if (typeof Notification !== "undefined") {
         setNotifyPermission(Notification.permission);
@@ -481,13 +570,18 @@ export default function HomePage() {
       window.removeEventListener("online", goOnline);
       window.removeEventListener("offline", goOffline);
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    currentSnapshotRef.current = { tasks, reflection, history };
+  }, [tasks, reflection, history]);
 
   // ── Schedule notifications when tasks / settings change ──────────────────────
   useEffect(() => {
+    const timers = notifyTimers.current;
     // Cancel all existing timers
-    notifyTimers.current.forEach(id => clearTimeout(id));
-    notifyTimers.current.clear();
+    timers.forEach(id => clearTimeout(id));
+    timers.clear();
 
     if (!notifyEnabled || notifyPermission !== "granted") return;
 
@@ -526,107 +620,127 @@ export default function HomePage() {
         }).catch(() => {});
       }, delay);
 
-      notifyTimers.current.set(task.id, id);
+      timers.set(task.id, id);
     });
 
     return () => {
-      notifyTimers.current.forEach(id => clearTimeout(id));
-      notifyTimers.current.clear();
+      timers.forEach(id => clearTimeout(id));
+      timers.clear();
     };
   }, [tasks, notifyEnabled, notifyPermission, notifyLeadMin]);
 
-  // ── Sync Helper Functions ────────────────────────────────────────────────────
-  async function pushSync(codeToUse: string, payload: { tasks: Task[]; reflection: Reflection; history: HistoryData; mistralKey?: string }) {
-    if (!codeToUse || !online) return;
+  // ── Account-based server storage ─────────────────────────────────────────────
+  async function saveServerSnapshot(snapshot: ServerSnapshot) {
+    if (!serverReady || !online || syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
     setIsSyncing(true);
-    const activeKey = (payload.mistralKey || mistralKey || (typeof window !== "undefined" ? localStorage.getItem("nhip-ngay-mistral-key") : "") || "").trim();
-    const dataToPush = {
-      tasks: payload.tasks,
-      reflection: payload.reflection,
-      history: payload.history,
-      mistralKey: activeKey,
-    };
     try {
-      const res = await fetch("/api/sync", {
+      const response = await fetch("/api/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: codeToUse, data: dataToPush }),
+        body: JSON.stringify({ data: snapshot, expectedUpdatedAt: serverVersionRef.current }),
       });
-      if (res.ok) {
-        const data = await res.json() as { updatedAt: number };
-        setLastSyncTime(data.updatedAt);
-        lastSyncTimeRef.current = data.updatedAt;
+      if (response.status === 401) {
+        redirectToSignIn();
+        return;
       }
+      const result = await response.json() as { data?: ServerSnapshot; updatedAt?: number };
+      if (response.status === 409 && result.data && typeof result.updatedAt === "number") {
+        const base = lastServerDataRef.current ?? result.data;
+        const merged = mergeServerSnapshots(base, snapshot, result.data);
+        lastServerDataRef.current = result.data;
+        lastServerFingerprintRef.current = snapshotFingerprint(result.data);
+        serverVersionRef.current = result.updatedAt;
+        setTasks(merged.tasks);
+        setReflection(merged.reflection);
+        setHistory(merged.history);
+        setToast("Đã gộp thay đổi mới từ thiết bị khác.");
+        return;
+      }
+      if (!response.ok || !result.data || typeof result.updatedAt !== "number") throw new Error("save failed");
+      lastServerDataRef.current = result.data;
+      lastServerFingerprintRef.current = snapshotFingerprint(result.data);
+      serverVersionRef.current = result.updatedAt;
     } catch {
-      // Silently handle offline/sync network errors
+      setToast("Chưa lưu được lên máy chủ — ứng dụng sẽ thử lại khi có mạng.");
     } finally {
+      syncInFlightRef.current = false;
       setIsSyncing(false);
     }
   }
 
-  async function pullSync(codeToUse: string, isManual = false) {
-    if (!codeToUse || !online) return;
+  async function pullServerSnapshot() {
+    if (!serverReady || !online || syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
     setIsSyncing(true);
     try {
-      const res = await fetch(`/api/sync?code=${encodeURIComponent(codeToUse)}`);
-      if (!res.ok) throw new Error("Sync failed");
-      const json = await res.json() as { code: string; data: { tasks?: Task[]; reflection?: Reflection; history?: HistoryData; mistralKey?: string } | null; updatedAt: number };
-      
-      if (json.data) {
-        // Sync API Key if available from server and not yet set locally
-        if (json.data.mistralKey && json.data.mistralKey.trim()) {
-          const k = json.data.mistralKey.trim();
-          setMistralKey(k);
-          setKeyOnline(true);
-          try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {}
-          fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k }) }).catch(() => {});
+      const response = await fetch("/api/sync", { cache: "no-store" });
+      if (response.status === 401) {
+        redirectToSignIn();
+        return;
+      }
+      if (!response.ok) throw new Error("pull failed");
+      const result = await response.json() as { data: ServerSnapshot | null; updatedAt: number; hasApiKey: boolean };
+      setKeyOnline(result.hasApiKey);
+      if (result.data && result.updatedAt > serverVersionRef.current) {
+        const local = currentSnapshotRef.current;
+        if (snapshotFingerprint(local) === lastServerFingerprintRef.current) {
+          applyServerSnapshot(result.data, result.updatedAt);
+        } else {
+          const base = lastServerDataRef.current ?? result.data;
+          const merged = mergeServerSnapshots(base, local, result.data);
+          lastServerDataRef.current = result.data;
+          lastServerFingerprintRef.current = snapshotFingerprint(result.data);
+          serverVersionRef.current = result.updatedAt;
+          currentSnapshotRef.current = merged;
+          setTasks(merged.tasks);
+          setReflection(merged.reflection);
+          setHistory(merged.history);
         }
-
-        // Only adopt tasks if server has non-empty tasks OR if server data is genuinely newer
-        if (Array.isArray(json.data.tasks) && json.data.tasks.length > 0) {
-          if (isManual || json.updatedAt > lastSyncTimeRef.current) {
-            setTasks(json.data.tasks);
-            if (json.data.reflection) setReflection(json.data.reflection);
-            if (json.data.history) setHistory(json.data.history);
-            setLastSyncTime(json.updatedAt);
-            lastSyncTimeRef.current = json.updatedAt;
-            if (isManual) setToast(`Đã đồng bộ dữ liệu từ mã ${codeToUse}!`);
-          }
-        } else if (tasks.length > 0) {
-          // If server data has 0 tasks but local device has tasks, push local tasks to server
-          pushSync(codeToUse, { tasks, reflection, history, mistralKey });
-        }
-      } else if (isManual || tasks.length > 0) {
-        pushSync(codeToUse, { tasks, reflection, history, mistralKey });
-        if (isManual) setToast(`Mã ${codeToUse} mới — đã tải dữ liệu hiện tại lên!`);
       }
     } catch {
-      if (isManual) setToast("Không thể kết nối máy chủ đồng bộ.");
+      // Keep the local cache and retry on the next interval.
     } finally {
+      syncInFlightRef.current = false;
       setIsSyncing(false);
     }
   }
 
-  // Auto push sync on data change
+  // Persist local changes to the account store after a short debounce.
   useEffect(() => {
-    if (!hydrated || !syncCode || !online) return;
+    if (!hydrated || !serverReady || !online) return;
+    const snapshot = { tasks, reflection, history };
+    if (snapshotFingerprint(snapshot) === lastServerFingerprintRef.current) return;
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     syncTimeoutRef.current = setTimeout(() => {
-      pushSync(syncCode, { tasks, reflection, history, mistralKey });
-    }, 1500);
+      void saveServerSnapshot(snapshot);
+    }, 800);
     return () => {
       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     };
-  }, [tasks, reflection, history, mistralKey, syncCode, online, hydrated]);
+  }, [tasks, reflection, history, online, hydrated, serverReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto pull sync periodically (every 25s)
+  // Refresh from the server periodically and immediately after reconnect/focus.
   useEffect(() => {
-    if (!hydrated || !syncCode || !online) return;
-    const timer = setInterval(() => {
-      pullSync(syncCode, false);
-    }, 25000);
-    return () => clearInterval(timer);
-  }, [syncCode, online, hydrated]);
+    if (!hydrated || !serverReady || !online) return;
+    const refresh = () => {
+      const current = currentSnapshotRef.current;
+      if (snapshotFingerprint(current) !== lastServerFingerprintRef.current) {
+        void saveServerSnapshot(current);
+      } else {
+        void pullServerSnapshot();
+      }
+    };
+    const onVisibility = () => { if (document.visibilityState === "visible") refresh(); };
+    const timer = window.setInterval(refresh, 15000);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [online, hydrated, serverReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Persist theme + apply to DOM
   useEffect(() => {
@@ -638,7 +752,7 @@ export default function HomePage() {
   useEffect(() => {
     if (!hydrated) return;
     const record: DayRecord = { total: todayTasks.length, done: completedToday };
-    setHistory(prev => {
+    setHistory(prev => { // eslint-disable-line react-hooks/set-state-in-effect
       const updated = { ...prev, [today]: record };
       try { localStorage.setItem(HISTORY_KEY, JSON.stringify(updated)); } catch {}
       return updated;
@@ -697,61 +811,30 @@ export default function HomePage() {
   }
 
   async function callMistralAI(text: string) {
-    let key = mistralKey.trim();
-    if (!key) {
-      try {
-        const savedKey = localStorage.getItem("nhip-ngay-mistral-key");
-        if (savedKey && savedKey.trim()) {
-          key = savedKey.trim();
-          setMistralKey(key);
-        }
-      } catch {}
-    }
-    if (!key) { setShowKeyInput(true); return; }
+    if (!keyOnline) { setShowKeyInput(true); return; }
     setIsAnalyzing(true);
     const todayStr = dateKey();
-    const systemPrompt = `You are a strict task extraction assistant. Respond ONLY with a single valid JSON object. No explanation, no markdown fences, no extra text whatsoever.`;
-    const userPrompt = `Extract ALL tasks from the following Vietnamese text. Return a JSON object with a "tasks" array.
-If the text mentions multiple tasks, return multiple items. If only one task, return one item.
-
-Each task object MUST have these fields:
-{
-  "title": "short task name in Vietnamese",
-  "category": "work|health|growth|home|finance|other",
-  "priority": "high|medium|low",
-  "energy": "high|medium|low",
-  "date": "YYYY-MM-DD (use ${todayStr} if not mentioned)",
-  "time": "HH:MM if explicitly mentioned, or \"\" if time is unclear or not mentioned",
-  "duration": <integer minutes, infer from context or use 30>,
-  "outcome": "1-2 sentence success criteria in Vietnamese",
-  "preparation": ["item1"],
-  "steps": ["step1", "step2"],
-  "note": "extra context or empty string"
-}
-
-IMPORTANT: Set "time" to empty string "" when the time cannot be clearly determined. Do NOT guess a time.
-
-Return format: { "tasks": [ {...}, {...} ] }
-
-Text: "${text}"`;
     try {
-      const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+      const res = await fetch("/api/ai", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
-        body: JSON.stringify({
-          model: "mistral-large-latest",
-          temperature: 0,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, today: todayStr }),
       });
+      if (res.status === 409) {
+        setKeyOnline(false);
+        setShowKeyInput(true);
+        setToast("Hãy lưu Mistral API key để dùng AI.");
+        return;
+      }
+      if (res.status === 422) {
+        setKeyOnline(false);
+        setShowKeyInput(true);
+        setToast("Mistral API key không hợp lệ. Hãy nhập key mới.");
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { choices: { message: { content: string } }[] };
-      const raw = data.choices[0]?.message?.content ?? "{}";
-      const parsed = JSON.parse(raw) as { tasks?: Partial<AiDraft>[] } | Partial<AiDraft>;
+      const data = await res.json() as { content: string };
+      const parsed = JSON.parse(data.content) as { tasks?: Partial<AiDraft>[] } | Partial<AiDraft>;
 
       // Support both { tasks: [...] } and legacy single-object response
       const rawList: Partial<AiDraft>[] = Array.isArray((parsed as { tasks?: Partial<AiDraft>[] }).tasks)
@@ -773,6 +856,30 @@ Text: "${text}"`;
       setToast("Không thể phân tích. Kiểm tra API key hoặc thử lại.");
     } finally {
       setIsAnalyzing(false);
+    }
+  }
+
+  async function saveApiKey() {
+    const key = keyInputValue.trim();
+    if (!key) return;
+    try {
+      const response = await fetch("/api/key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key }),
+      });
+      if (response.status === 401) {
+        redirectToSignIn();
+        return;
+      }
+      if (!response.ok) throw new Error("save key failed");
+      localStorage.removeItem("nhip-ngay-mistral-key");
+      setKeyOnline(true);
+      setKeyInputValue("");
+      setShowKeyInput(false);
+      setToast("Đã lưu API key an toàn trên máy chủ.");
+    } catch {
+      setToast("Không lưu được API key lên máy chủ.");
     }
   }
 
@@ -1144,21 +1251,13 @@ Text: "${text}"`;
           <span className={`streak-badge ${streak === 0 ? "zero" : ""}`} title={`Chuỗi ${streak} ngày liên tiếp`}>
             <Flame size={13} />{streak > 0 ? `${streak} ngày` : "Bắt đầu hôm nay"}
           </span>
-          <span className={`connection ${online ? "online" : "offline"}`} title={online ? "Đang trực tuyến" : "Đang dùng ngoại tuyến"}>
-            {online ? <Wifi size={16} /> : <WifiOff size={16} />}
-            <span>{online ? "Đã lưu" : "Ngoại tuyến"}</span>
-          </span>
-          {/* Cross-device sync button */}
-          <button
-            type="button"
-            className={`sync-header-btn${isSyncing ? " syncing" : ""}`}
-            onClick={() => setShowSyncModal(true)}
-            title={`Đồng bộ đa thiết bị (Mã: ${syncCode || "..."})`}
-            aria-label="Mở cài đặt đồng bộ thiết bị"
+          <span
+            className={`connection ${online && serverReady ? "online" : "offline"}`}
+            title={!online ? "Đang dùng ngoại tuyến" : serverReady ? "Dữ liệu lưu theo tài khoản trên máy chủ" : "Chưa kết nối kho dữ liệu máy chủ"}
           >
-            <RefreshCw size={15} className={isSyncing ? "spin-icon" : ""} />
-            <span>{syncCode || "Đồng bộ"}</span>
-          </button>
+            {online ? <Wifi size={16} /> : <WifiOff size={16} />}
+            <span>{!online ? "Ngoại tuyến" : isSyncing ? "Đang lưu..." : serverReady ? "Đã lưu máy chủ" : "Chưa kết nối"}</span>
+          </span>
           {/* Notification toggle */}
           <button
             type="button"
@@ -1390,7 +1489,7 @@ Text: "${text}"`;
                     <h2>Kiểm tra &amp; chỉnh sửa</h2>
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button type="button" className="icon-button" onClick={() => { setKeyInputValue(mistralKey); setShowKeyInput(true); }} title="Cài Mistral API key" aria-label="Cài API key"><KeyRound size={18} /></button>
+                    <button type="button" className="icon-button" onClick={() => { setKeyInputValue(""); setShowKeyInput(true); }} title="Cài Mistral API key" aria-label="Cài API key"><KeyRound size={18} /></button>
                     <button type="button" className="icon-button" onClick={() => { setComposerOpen(false); resetAiState(); }} aria-label="Đóng"><X size={22} /></button>
                   </div>
                 </div>
@@ -1471,7 +1570,7 @@ Text: "${text}"`;
                 <div className="composer-header">
                   <div><span className="eyebrow">Ghi rõ để làm dễ</span><h2>Thêm công việc</h2></div>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button type="button" className="icon-button" onClick={() => { setKeyInputValue(mistralKey); setShowKeyInput(true); }} aria-label="Cài API key" title="Cài Mistral API key"><KeyRound size={18} /></button>
+                    <button type="button" className="icon-button" onClick={() => { setKeyInputValue(""); setShowKeyInput(true); }} aria-label="Cài API key" title="Cài Mistral API key"><KeyRound size={18} /></button>
                     <button type="button" className="icon-button" onClick={() => { setComposerOpen(false); resetAiState(); }} aria-label="Đóng"><X size={22} /></button>
                   </div>
                 </div>
@@ -1570,7 +1669,7 @@ Text: "${text}"`;
               <Brain size={26} />
               <div>
                 <h2>Mistral API Key</h2>
-                <p>{keyOnline ? <span className="key-online-badge">✅ Đã lưu trên máy chủ — đăng nhập lại tự điền</span> : "Key lưu trên thiết bị này, không gửi đi đâu."}</p>
+                <p>{keyOnline ? <span className="key-online-badge">✅ Đã lưu theo tài khoản trên máy chủ</span> : "Key sẽ được lưu trên máy chủ và dùng được ở mọi thiết bị."}</p>
               </div>
             </div>
 
@@ -1585,35 +1684,11 @@ Text: "${text}"`;
               autoFocus
               onKeyDown={e => {
                 if (e.key === "Enter") {
-                  const k = keyInputValue.trim();
-                  if (!k) return;
-                  setMistralKey(k);
-                  try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {}
-                  // Save to server cookie
-                  fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k }) })
-                    .then(() => setKeyOnline(true)).catch(() => {});
-                  setKeyInputValue("");
-                  setShowKeyInput(false);
-                  setToast("Đã lưu API key.");
+                  e.preventDefault();
+                  void saveApiKey();
                 }
               }}
             />
-
-            {/* Copy existing key */}
-            {mistralKey && (
-              <button
-                type="button"
-                className="key-copy-btn"
-                onClick={() => {
-                  navigator.clipboard.writeText(mistralKey)
-                    .then(() => setToast("Đã sao chép key — dán vào máy khác nhé!"))
-                    .catch(() => setToast("Không sao chép được, hãy sao chép thủ công."));
-                }}
-                aria-label="Sao chép API key"
-              >
-                <Clipboard size={15} /> Sao chép key hiện tại sang máy khác
-              </button>
-            )}
 
             <p className="key-hint">Lấy key tại <a href="https://console.mistral.ai" target="_blank" rel="noreferrer">console.mistral.ai</a> → API Keys</p>
             <div className="composer-footer">
@@ -1621,17 +1696,7 @@ Text: "${text}"`;
               <button
                 type="button"
                 className="save-button"
-                onClick={() => {
-                  const k = keyInputValue.trim();
-                  if (!k) return;
-                  setMistralKey(k);
-                  try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {}
-                  fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k }) })
-                    .then(() => setKeyOnline(true)).catch(() => {});
-                  setKeyInputValue("");
-                  setShowKeyInput(false);
-                  setToast("Đã lưu API key.");
-                }}
+                onClick={() => void saveApiKey()}
               ><Check size={18} /> Lưu key</button>
             </div>
           </div>
@@ -1679,103 +1744,6 @@ Text: "${text}"`;
           </div>
         </div>
       )}
-
-      {/* ── Cross-Device Sync Modal ── */}
-      {showSyncModal && (
-        <div className="sheet-layer key-layer" role="dialog" aria-modal="true" aria-label="Đồng bộ thiết bị">
-          <button className="sheet-backdrop" type="button" onClick={() => setShowSyncModal(false)} aria-label="Đóng" />
-          <div className="key-modal sync-modal">
-            <div className="sheet-handle" aria-hidden="true" />
-            <div className="key-modal-header">
-              <RefreshCw size={26} className={isSyncing ? "spin-icon" : ""} />
-              <div>
-                <h2>Đồng bộ PC ↔ Điện thoại</h2>
-                <p>Tạo việc ở PC, mở Điện thoại vào là thấy ngay.</p>
-              </div>
-            </div>
-
-            {/* Current Sync Code Box */}
-            <div className="sync-code-box">
-              <span className="sync-box-label">MÃ ĐỒNG BỘ CỦA THIẾT BỊ NÀY</span>
-              <div className="sync-code-row">
-                <strong className="sync-code-val">{syncCode}</strong>
-                <button
-                  type="button"
-                  className="sync-copy-btn"
-                  onClick={() => {
-                    navigator.clipboard.writeText(syncCode)
-                      .then(() => setToast("Đã sao chép mã đồng bộ! Nhập mã này trên Điện thoại."))
-                      .catch(() => setToast("Vui lòng sao chép mã thủ công: " + syncCode));
-                  }}
-                  aria-label="Sao chép mã đồng bộ"
-                >
-                  <Clipboard size={15} /> Sao chép mã
-                </button>
-              </div>
-              <p className="sync-box-hint">
-                💡 Trên <strong>Điện thoại</strong>: Mở web → nhấn nút <strong>Đồng bộ</strong> trên cùng → dán mã <strong>{syncCode}</strong> này vào để xem chung danh sách việc.
-              </p>
-            </div>
-
-            {/* Connect other code */}
-            <div className="sync-connect-box">
-              <span className="sync-box-label">HOẶC KẾT NỐI MÃ TỪ THIẾT BỊ KHÁC</span>
-              <div className="sync-input-wrap">
-                <input
-                  className="key-input"
-                  style={{ textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}
-                  placeholder="Nhập mã từ máy khác (vd: NHIP-9K2P)..."
-                  value={syncInput}
-                  onChange={e => setSyncInput(e.target.value.toUpperCase())}
-                  onKeyDown={e => {
-                    if (e.key === "Enter" && syncInput.trim()) {
-                      const code = syncInput.trim().toUpperCase();
-                      setSyncCode(code);
-                      try { localStorage.setItem("nhip-ngay-sync-code", code); } catch {}
-                      pullSync(code, true);
-                      setSyncInput("");
-                      setShowSyncModal(false);
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  className="save-button"
-                  disabled={!syncInput.trim()}
-                  onClick={() => {
-                    const code = syncInput.trim().toUpperCase();
-                    setSyncCode(code);
-                    try { localStorage.setItem("nhip-ngay-sync-code", code); } catch {}
-                    pullSync(code, true);
-                    setSyncInput("");
-                    setShowSyncModal(false);
-                  }}
-                >
-                  Kết nối
-                </button>
-              </div>
-            </div>
-
-            {lastSyncTime && (
-              <p className="key-hint" style={{ color: "var(--green)", fontWeight: 650 }}>
-                ✓ Đã đồng bộ lúc {new Date(lastSyncTime).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-              </p>
-            )}
-
-            <div className="composer-footer">
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => pullSync(syncCode, true)}
-              >
-                Tải lại dữ liệu
-              </button>
-              <button type="button" className="save-button" onClick={() => setShowSyncModal(false)}>Đóng</button>
-            </div>
-          </div>
-        </div>
-      )}
-
 
       {focus && (
         <div className="focus-dock" aria-live="polite">

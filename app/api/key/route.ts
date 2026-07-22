@@ -1,39 +1,43 @@
-import { cookies } from "next/headers";
-import { type NextRequest, NextResponse } from "next/server";
+import { type NextRequest } from "next/server";
+import {
+  apiErrorResponse,
+  deleteUserApiKey,
+  getUserStore,
+  requireOwnerId,
+  saveUserApiKey,
+} from "@/lib/server-store";
 
-const COOKIE_NAME = "nhip-ngay-api-key";
-const ONE_YEAR = 60 * 60 * 24 * 365;
-
-export async function GET() {
-  const jar = await cookies();
-  const key = jar.get(COOKIE_NAME)?.value ?? "";
-  return NextResponse.json({ key });
-}
-
-export async function POST(req: NextRequest) {
-  const { key } = (await req.json()) as { key?: string };
-  if (typeof key !== "string" || !key.trim()) {
-    return NextResponse.json({ error: "invalid key" }, { status: 400 });
+export async function GET(request: NextRequest) {
+  try {
+    const ownerId = await requireOwnerId(request);
+    const store = await getUserStore(ownerId);
+    return Response.json({ hasKey: Boolean(store?.apiKey) });
+  } catch (error) {
+    return apiErrorResponse(error);
   }
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set(COOKIE_NAME, key.trim(), {
-    httpOnly: true,
-    secure: true,
-    sameSite: "strict",
-    maxAge: ONE_YEAR,
-    path: "/",
-  });
-  return res;
 }
 
-export async function DELETE() {
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set(COOKIE_NAME, "", {
-    httpOnly: true,
-    secure: true,
-    sameSite: "strict",
-    maxAge: 0,
-    path: "/",
-  });
-  return res;
+export async function POST(request: NextRequest) {
+  try {
+    const ownerId = await requireOwnerId(request);
+    const { key } = (await request.json()) as { key?: unknown };
+    const cleanKey = typeof key === "string" ? key.trim() : "";
+    if (cleanKey.length < 10 || cleanKey.length > 500) {
+      return Response.json({ error: "API key không hợp lệ." }, { status: 400 });
+    }
+    await saveUserApiKey(ownerId, cleanKey);
+    return Response.json({ ok: true, hasKey: true });
+  } catch (error) {
+    return apiErrorResponse(error);
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const ownerId = await requireOwnerId(request);
+    await deleteUserApiKey(ownerId);
+    return Response.json({ ok: true, hasKey: false });
+  } catch (error) {
+    return apiErrorResponse(error);
+  }
 }

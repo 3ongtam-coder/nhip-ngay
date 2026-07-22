@@ -1,77 +1,46 @@
-import { eq } from "drizzle-orm";
-import { type NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/db";
-import { syncStores } from "@/db/schema";
+import { type NextRequest } from "next/server";
+import {
+  apiErrorResponse,
+  getUserStore,
+  parseServerData,
+  requireOwnerId,
+  saveUserData,
+  validateServerData,
+} from "@/lib/server-store";
 
-// Fallback in-memory store if D1 database is not initialized yet
-const memoryStore = new Map<string, { data: string; updatedAt: number }>();
-
-export async function GET(req: NextRequest) {
-  const code = req.nextUrl.searchParams.get("code")?.trim().toUpperCase();
-  if (!code) {
-    return NextResponse.json({ error: "Missing sync code" }, { status: 400 });
-  }
-
+export async function GET(request: NextRequest) {
   try {
-    const db = getDb();
-    if (db) {
-      const records = await db.select().from(syncStores).where(eq(syncStores.code, code)).limit(1);
-      if (records.length > 0) {
-        const item = records[0];
-        return NextResponse.json({
-          code: item.code,
-          data: JSON.parse(item.data),
-          updatedAt: item.updatedAt,
-        });
-      }
-    }
-  } catch {
-    // Failover to memoryStore
-  }
-
-  const cached = memoryStore.get(code);
-  if (cached) {
-    return NextResponse.json({
-      code,
-      data: JSON.parse(cached.data),
-      updatedAt: cached.updatedAt,
+    const ownerId = await requireOwnerId(request);
+    const store = await getUserStore(ownerId);
+    const data = store ? parseServerData(store.data) : null;
+    return Response.json({
+      data,
+      updatedAt: data ? store?.updatedAt ?? 0 : 0,
+      hasApiKey: Boolean(store?.apiKey),
     });
+  } catch (error) {
+    return apiErrorResponse(error);
   }
-
-  return NextResponse.json({ code, data: null, updatedAt: 0 });
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
-    const body = (await req.json()) as { code?: string; data?: unknown };
-    const rawCode = body.code?.trim().toUpperCase();
-    if (!rawCode || !body.data) {
-      return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+    const ownerId = await requireOwnerId(request);
+    const body = (await request.json()) as { data?: unknown; expectedUpdatedAt?: unknown };
+    const data = validateServerData(body.data);
+    const expectedUpdatedAt = Number(body.expectedUpdatedAt);
+    if (!Number.isSafeInteger(expectedUpdatedAt) || expectedUpdatedAt < 0) {
+      return Response.json({ error: "Phiên bản dữ liệu không hợp lệ." }, { status: 400 });
     }
 
-    const updatedAt = Date.now();
-    const dataString = JSON.stringify(body.data);
-
-    // Save to memoryStore fallback
-    memoryStore.set(rawCode, { data: dataString, updatedAt });
-
-    try {
-      const db = getDb();
-      if (db) {
-        await db
-          .insert(syncStores)
-          .values({ code: rawCode, data: dataString, updatedAt })
-          .onConflictDoUpdate({
-            target: syncStores.code,
-            set: { data: dataString, updatedAt },
-          });
-      }
-    } catch {
-      // Failover to memoryStore succeeded
-    }
-
-    return NextResponse.json({ ok: true, code: rawCode, updatedAt });
-  } catch {
-    return NextResponse.json({ error: "Failed to save sync data" }, { status: 500 });
+    const result = await saveUserData(ownerId, data, expectedUpdatedAt);
+    const response = {
+      data: parseServerData(result.store.data),
+      updatedAt: result.store.updatedAt,
+      hasApiKey: Boolean(result.store.apiKey),
+    };
+    return Response.json(response, { status: result.conflict ? 409 : 200 });
+  } catch (error) {
+    return apiErrorResponse(error);
   }
 }

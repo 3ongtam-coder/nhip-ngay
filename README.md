@@ -98,6 +98,20 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 - `npm run validate:artifact`: recheck an existing artifact's manifest and ESM `default.fetch` export
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 
+## Nhịp Ngày Server Storage
+
+Tasks, reflections, history, and the Mistral API key are stored in the D1 `DB`
+binding per authenticated ChatGPT account. Devices signed in with the same
+account automatically use the same server record; pairing codes are no longer
+used. On the first successful load, the browser's previous local task data and
+API key are migrated to the account store. The key is never returned by the key
+API, and Mistral requests are proxied through `/api/ai`.
+
+The initial schema is in `drizzle/0000_chemical_proteus.sql`. For local D1
+testing, run `npx wrangler d1 migrations apply site-creator-d1 --local`. A Sites
+deployment uses `.openai/hosting.json` to provision the `DB` binding and applies
+the checked-in migration.
+
 Use build and validation commands for targeted diagnosis after a remote failure, not as part of the normal checkpoint path.
 
 The timeout defaults can be overridden for a controlled canary with `SITES_INSTALL_TIMEOUT`, `SITES_INSTALL_KILL_AFTER`, `SITES_BUILD_TIMEOUT`, and `SITES_BUILD_KILL_AFTER`. A timeout fails the command; the helpers never retry an unchanged install or build.
