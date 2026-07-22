@@ -18,6 +18,7 @@ function toRouteErrorMessage(error: unknown) {
 export async function GET() {
   try {
     const db = getDb();
+    if (!db) throw new Error("Database unavailable");
     const rows = await db
       .select()
       .from(notes)
@@ -47,6 +48,7 @@ export async function POST(request: Request) {
     }
 
     const db = getDb();
+    if (!db) throw new Error("Database unavailable");
     const [note] = await db.insert(notes).values({ title, content }).returning();
     return Response.json({ note }, { status: 201 });
   } catch (error) {

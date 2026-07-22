@@ -28,6 +28,7 @@ import {
   Pause,
   Play,
   Plus,
+  RefreshCw,
   Search,
   Sparkles,
   Sun,
@@ -353,6 +354,14 @@ export default function HomePage() {
   const notifyTimers = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [showNotifySettings, setShowNotifySettings] = useState(false);
 
+  // Cross-device sync state
+  const [syncCode, setSyncCode] = useState("");
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [syncInput, setSyncInput] = useState("");
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
+  const syncTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const today = dateKey();
   const todayTasks = useMemo(
     () =>
@@ -423,6 +432,17 @@ export default function HomePage() {
         if (savedLeadMin) setNotifyLeadMin(Number(savedLeadMin));
         const savedNotifyEnabled = localStorage.getItem("nhip-ngay-notify-enabled");
         if (savedNotifyEnabled === "1") setNotifyEnabled(true);
+        // Load or initialize sync code
+        let code = localStorage.getItem("nhip-ngay-sync-code");
+        if (!code) {
+          const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+          let rand = "";
+          for (let i = 0; i < 4; i++) rand += chars.charAt(Math.floor(Math.random() * chars.length));
+          code = `NHIP-${rand}`;
+          try { localStorage.setItem("nhip-ngay-sync-code", code); } catch {}
+        }
+        setSyncCode(code);
+        pullSync(code, false);
       } catch {
         // Keep the safe starter data when local storage is unavailable or malformed.
       }
@@ -512,6 +532,72 @@ export default function HomePage() {
       notifyTimers.current.clear();
     };
   }, [tasks, notifyEnabled, notifyPermission, notifyLeadMin]);
+
+  // ── Sync Helper Functions ────────────────────────────────────────────────────
+  async function pushSync(codeToUse: string, payload: { tasks: Task[]; reflection: Reflection; history: HistoryData }) {
+    if (!codeToUse || !online) return;
+    setIsSyncing(true);
+    try {
+      const res = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: codeToUse, data: payload }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { updatedAt: number };
+        setLastSyncTime(data.updatedAt);
+      }
+    } catch {
+      // Silently handle offline/sync network errors
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
+  async function pullSync(codeToUse: string, isManual = false) {
+    if (!codeToUse || !online) return;
+    setIsSyncing(true);
+    try {
+      const res = await fetch(`/api/sync?code=${encodeURIComponent(codeToUse)}`);
+      if (!res.ok) throw new Error("Sync failed");
+      const json = await res.json() as { code: string; data: { tasks?: Task[]; reflection?: Reflection; history?: HistoryData } | null; updatedAt: number };
+      if (json.data && Array.isArray(json.data.tasks) && json.data.tasks.length > 0) {
+        setTasks(json.data.tasks);
+        if (json.data.reflection) setReflection(json.data.reflection);
+        if (json.data.history) setHistory(json.data.history);
+        setLastSyncTime(json.updatedAt);
+        if (isManual) setToast(`Đã tải dữ liệu từ mã ${codeToUse}!`);
+      } else if (isManual) {
+        pushSync(codeToUse, { tasks, reflection, history });
+        setToast(`Mã ${codeToUse} mới — đã tải dữ liệu hiện tại lên!`);
+      }
+    } catch {
+      if (isManual) setToast("Không thể kết nối máy chủ đồng bộ.");
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
+  // Auto push sync on data change
+  useEffect(() => {
+    if (!hydrated || !syncCode || !online) return;
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    syncTimeoutRef.current = setTimeout(() => {
+      pushSync(syncCode, { tasks, reflection, history });
+    }, 1500);
+    return () => {
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    };
+  }, [tasks, reflection, history, syncCode, online, hydrated]);
+
+  // Auto pull sync periodically (every 25s)
+  useEffect(() => {
+    if (!hydrated || !syncCode || !online) return;
+    const timer = setInterval(() => {
+      pullSync(syncCode, false);
+    }, 25000);
+    return () => clearInterval(timer);
+  }, [syncCode, online, hydrated]);
 
   // Persist theme + apply to DOM
   useEffect(() => {
@@ -1024,6 +1110,17 @@ Text: "${text}"`;
             {online ? <Wifi size={16} /> : <WifiOff size={16} />}
             <span>{online ? "Đã lưu" : "Ngoại tuyến"}</span>
           </span>
+          {/* Cross-device sync button */}
+          <button
+            type="button"
+            className={`sync-header-btn${isSyncing ? " syncing" : ""}`}
+            onClick={() => setShowSyncModal(true)}
+            title={`Đồng bộ đa thiết bị (Mã: ${syncCode || "..."})`}
+            aria-label="Mở cài đặt đồng bộ thiết bị"
+          >
+            <RefreshCw size={15} className={isSyncing ? "spin-icon" : ""} />
+            <span>{syncCode || "Đồng bộ"}</span>
+          </button>
           {/* Notification toggle */}
           <button
             type="button"
@@ -1540,6 +1637,102 @@ Text: "${text}"`;
                 setToast("Đã tắt nhắc nhở.");
               }}>Tắt nhắc nhở</button>
               <button type="button" className="save-button" onClick={() => setShowNotifySettings(false)}><Check size={18} /> Xác nhận</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cross-Device Sync Modal ── */}
+      {showSyncModal && (
+        <div className="sheet-layer key-layer" role="dialog" aria-modal="true" aria-label="Đồng bộ thiết bị">
+          <button className="sheet-backdrop" type="button" onClick={() => setShowSyncModal(false)} aria-label="Đóng" />
+          <div className="key-modal sync-modal">
+            <div className="sheet-handle" aria-hidden="true" />
+            <div className="key-modal-header">
+              <RefreshCw size={26} className={isSyncing ? "spin-icon" : ""} />
+              <div>
+                <h2>Đồng bộ PC ↔ Điện thoại</h2>
+                <p>Tạo việc ở PC, mở Điện thoại vào là thấy ngay.</p>
+              </div>
+            </div>
+
+            {/* Current Sync Code Box */}
+            <div className="sync-code-box">
+              <span className="sync-box-label">MÃ ĐỒNG BỘ CỦA THIẾT BỊ NÀY</span>
+              <div className="sync-code-row">
+                <strong className="sync-code-val">{syncCode}</strong>
+                <button
+                  type="button"
+                  className="sync-copy-btn"
+                  onClick={() => {
+                    navigator.clipboard.writeText(syncCode)
+                      .then(() => setToast("Đã sao chép mã đồng bộ! Nhập mã này trên Điện thoại."))
+                      .catch(() => setToast("Vui lòng sao chép mã thủ công: " + syncCode));
+                  }}
+                  aria-label="Sao chép mã đồng bộ"
+                >
+                  <Clipboard size={15} /> Sao chép mã
+                </button>
+              </div>
+              <p className="sync-box-hint">
+                💡 Trên <strong>Điện thoại</strong>: Mở web → nhấn nút <strong>Đồng bộ</strong> trên cùng → dán mã <strong>{syncCode}</strong> này vào để xem chung danh sách việc.
+              </p>
+            </div>
+
+            {/* Connect other code */}
+            <div className="sync-connect-box">
+              <span className="sync-box-label">HOẶC KẾT NỐI MÃ TỪ THIẾT BỊ KHÁC</span>
+              <div className="sync-input-wrap">
+                <input
+                  className="key-input"
+                  style={{ textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}
+                  placeholder="Nhập mã từ máy khác (vd: NHIP-9K2P)..."
+                  value={syncInput}
+                  onChange={e => setSyncInput(e.target.value.toUpperCase())}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && syncInput.trim()) {
+                      const code = syncInput.trim().toUpperCase();
+                      setSyncCode(code);
+                      try { localStorage.setItem("nhip-ngay-sync-code", code); } catch {}
+                      pullSync(code, true);
+                      setSyncInput("");
+                      setShowSyncModal(false);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="save-button"
+                  disabled={!syncInput.trim()}
+                  onClick={() => {
+                    const code = syncInput.trim().toUpperCase();
+                    setSyncCode(code);
+                    try { localStorage.setItem("nhip-ngay-sync-code", code); } catch {}
+                    pullSync(code, true);
+                    setSyncInput("");
+                    setShowSyncModal(false);
+                  }}
+                >
+                  Kết nối
+                </button>
+              </div>
+            </div>
+
+            {lastSyncTime && (
+              <p className="key-hint" style={{ color: "var(--green)", fontWeight: 650 }}>
+                ✓ Đã đồng bộ lúc {new Date(lastSyncTime).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </p>
+            )}
+
+            <div className="composer-footer">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => pullSync(syncCode, true)}
+              >
+                Tải lại dữ liệu
+              </button>
+              <button type="button" className="save-button" onClick={() => setShowSyncModal(false)}>Đóng</button>
             </div>
           </div>
         </div>

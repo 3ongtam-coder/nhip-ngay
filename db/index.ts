@@ -3,11 +3,11 @@ import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./schema";
 
 export function getDb() {
-  if (!env.DB) {
-    throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
-    );
+  try {
+    const cfEnv = env as { DB?: D1Database };
+    if (!cfEnv?.DB) return null;
+    return drizzle(cfEnv.DB, { schema });
+  } catch {
+    return null;
   }
-
-  return drizzle(env.DB, { schema });
 }

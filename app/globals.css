@@ -2538,3 +2538,124 @@ p {
   border-color: rgba(120, 100, 70, 0.4);
   color: var(--faint);
 }
+
+/* ── Sync Header Button & Sync Modal ─────────────────────────────────────────── */
+
+.sync-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 17px;
+  background: rgba(255, 251, 244, 0.6);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 160ms, background 160ms, color 160ms;
+}
+
+.sync-header-btn:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+  background: white;
+}
+
+.sync-header-btn.syncing {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.sync-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.sync-code-box,
+.sync-connect-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 12px;
+  background: rgba(255, 250, 242, 0.7);
+}
+
+.sync-box-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.sync-code-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sync-code-val {
+  font-family: monospace;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: var(--orange-dark);
+}
+
+.sync-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: white;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 150ms, color 150ms;
+}
+
+.sync-copy-btn:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.sync-box-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.sync-input-wrap {
+  display: flex;
+  gap: 10px;
+}
+
+.sync-input-wrap input {
+  flex: 1;
+}
+
+[data-theme="dark"] .sync-header-btn {
+  background: rgba(38, 32, 24, 0.7);
+  border-color: rgba(120, 100, 70, 0.4);
+  color: var(--ink);
+}
+
+[data-theme="dark"] .sync-code-box,
+[data-theme="dark"] .sync-connect-box {
+  background: rgba(38, 32, 24, 0.6);
+  border-color: rgba(120, 100, 70, 0.4);
+}
+
+[data-theme="dark"] .sync-copy-btn {
+  background: rgba(48, 40, 30, 0.9);
+  border-color: rgba(120, 100, 70, 0.4);
+  color: var(--ink);
+}
+
