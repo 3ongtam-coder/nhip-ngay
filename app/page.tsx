@@ -536,14 +536,20 @@ export default function HomePage() {
   }, [tasks, notifyEnabled, notifyPermission, notifyLeadMin]);
 
   // ── Sync Helper Functions ────────────────────────────────────────────────────
-  async function pushSync(codeToUse: string, payload: { tasks: Task[]; reflection: Reflection; history: HistoryData }) {
+  async function pushSync(codeToUse: string, payload: { tasks: Task[]; reflection: Reflection; history: HistoryData; mistralKey?: string }) {
     if (!codeToUse || !online) return;
     setIsSyncing(true);
+    const dataToPush = {
+      tasks: payload.tasks,
+      reflection: payload.reflection,
+      history: payload.history,
+      mistralKey: (payload.mistralKey ?? mistralKey).trim(),
+    };
     try {
       const res = await fetch("/api/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: codeToUse, data: payload }),
+        body: JSON.stringify({ code: codeToUse, data: dataToPush }),
       });
       if (res.ok) {
         const data = await res.json() as { updatedAt: number };
@@ -563,18 +569,25 @@ export default function HomePage() {
     try {
       const res = await fetch(`/api/sync?code=${encodeURIComponent(codeToUse)}`);
       if (!res.ok) throw new Error("Sync failed");
-      const json = await res.json() as { code: string; data: { tasks?: Task[]; reflection?: Reflection; history?: HistoryData } | null; updatedAt: number };
+      const json = await res.json() as { code: string; data: { tasks?: Task[]; reflection?: Reflection; history?: HistoryData; mistralKey?: string } | null; updatedAt: number };
       if (json.data && Array.isArray(json.data.tasks)) {
         if (isManual || json.updatedAt > lastSyncTimeRef.current) {
           setTasks(json.data.tasks);
           if (json.data.reflection) setReflection(json.data.reflection);
           if (json.data.history) setHistory(json.data.history);
+          if (json.data.mistralKey && json.data.mistralKey.trim()) {
+            const k = json.data.mistralKey.trim();
+            setMistralKey(k);
+            setKeyOnline(true);
+            try { localStorage.setItem("nhip-ngay-mistral-key", k); } catch {}
+            fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k }) }).catch(() => {});
+          }
           setLastSyncTime(json.updatedAt);
           lastSyncTimeRef.current = json.updatedAt;
           if (isManual) setToast(`Đã đồng bộ dữ liệu từ mã ${codeToUse}!`);
         }
       } else if (isManual) {
-        pushSync(codeToUse, { tasks, reflection, history });
+        pushSync(codeToUse, { tasks, reflection, history, mistralKey });
         setToast(`Mã ${codeToUse} mới — đã tải dữ liệu hiện tại lên!`);
       }
     } catch {
@@ -589,12 +602,12 @@ export default function HomePage() {
     if (!hydrated || !syncCode || !online) return;
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     syncTimeoutRef.current = setTimeout(() => {
-      pushSync(syncCode, { tasks, reflection, history });
+      pushSync(syncCode, { tasks, reflection, history, mistralKey });
     }, 1500);
     return () => {
       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     };
-  }, [tasks, reflection, history, syncCode, online, hydrated]);
+  }, [tasks, reflection, history, mistralKey, syncCode, online, hydrated]);
 
   // Auto pull sync periodically (every 25s)
   useEffect(() => {
